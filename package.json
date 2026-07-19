@@ -1,0 +1,37 @@
+{
+  "name": "scrybe",
+  "version": "0.1.1",
+  "description": "Turn typed documents (PDF/DOCX/TXT) into handwriting while preserving the original page layout. Interactive CLI and local web UI.",
+  "bin": {
+    "scrybe": "npm/bin/scrybe.js"
+  },
+  "type": "commonjs",
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "npm/",
+    "src/",
+    "pyproject.toml",
+    "requirements.txt",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node npm/test/smoke.js"
+  },
+  "keywords": [
+    "handwriting",
+    "pdf",
+    "docx",
+    "document",
+    "converter",
+    "cli"
+  ],
+  "license": "MIT",
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ]
+}

@@ -1,0 +1,33 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# --- Node / npm ---
+node_modules/
+npm-debug.log*
+
+# --- LibreOffice throwaway profiles ---
+.lo_profile*/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+
+# --- Claude Code session dir (not part of the app) ---
+.claude/
+
+# --- Scrybe scratch / test artifacts ---
+_*.pdf
+_*.docx
+_*.txt
+_*.md
+_*.png
+*_out.pdf
+*_out.docx

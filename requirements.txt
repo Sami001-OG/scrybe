@@ -1,0 +1,9 @@
+# Pinned for Python 3.12 (binary wheels available; do NOT use the 3.15 alpha interpreter)
+PyMuPDF==1.24.10
+python-docx==1.1.2
+lxml==5.3.0
+pdfplumber==0.11.4
+# Handwriting-sample segmentation (glyphs.py) and web UI (webapp.py)
+Pillow==12.3.0
+numpy==2.1.3
+Flask==3.1.0
