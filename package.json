@@ -1,9 +1,9 @@
 {
-  "name": "scrybe",
+  "name": "cheatscrybe",
   "version": "0.1.1",
   "description": "Turn typed documents (PDF/DOCX/TXT) into handwriting while preserving the original page layout. Interactive CLI and local web UI.",
   "bin": {
-    "scrybe": "npm/bin/scrybe.js"
+    "cheatscrybe": "npm/bin/scrybe.js"
   },
   "type": "commonjs",
   "engines": {

@@ -55,10 +55,10 @@ they deliver the document's text content instead of the handwriting.
 ## Install
 
 ```bash
-npm install -g scrybe
+npm install -g cheatscrybe
 ```
 
-That's it. The first time you run `scrybe`, it sets itself up automatically:
+That's it. The first time you run `cheatscrybe`, it sets itself up automatically:
 
 - **Python** — Scrybe's engine is Python. It reuses a Python 3.12+ you already
   have, or quietly downloads a private, self-contained copy into `~/.scrybe`
@@ -82,12 +82,12 @@ That's it. The first time you run `scrybe`, it sets itself up automatically:
 
 ## Usage
 
-### Just run `scrybe`
+### Just run `cheatscrybe`
 
 The friendliest way — an interactive menu that walks you through everything:
 
 ```bash
-scrybe
+cheatscrybe
 ```
 
 You'll get a short menu:
@@ -213,7 +213,7 @@ Project layout:
 - `src/doc_to_hand/` — the Python engine (parsing, layout, rendering, glyphs,
   CLI, wizard, web app) and the bundled handwriting font under `fonts/`.
 - `npm/` — the dependency-free Node launcher that provisions Python and hands
-  off to the engine. `bin/scrybe.js` is the `scrybe` command.
+  off to the engine. `bin/scrybe.js` is the `cheatscrybe` command.
 
 Tests that require LibreOffice (DOCX input) skip automatically when it isn't
 installed, so the suite is green on any machine.
