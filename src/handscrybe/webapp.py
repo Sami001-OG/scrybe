@@ -1,7 +1,8 @@
 """Local Flask web UI for handscrybe.
 
 A single-page tool: the user uploads a document (PDF / DOCX / TXT) and,
-optionally, a photo of their handwriting sample sheet (A-Z, a-z, 0-9). The app
+optionally, a photo of their handwriting sample sheet (A-Z, a-z, 0-9, and an
+optional punctuation row). The app
 runs the exact same `pipeline.convert` the CLI uses and streams back the
 resulting handwriting PDF.
 
@@ -360,12 +361,13 @@ _INDEX_HTML = """<!doctype html>
       <label class="field" for="sample">Your handwriting sample
         <span class="hint">optional &mdash; a photo of one sheet written
         <code>A&hellip;Z</code> then <code>a&hellip;z</code> then
-        <code>0&hellip;9</code>, one row each</span></label>
+        <code>0&hellip;9</code>, one row each, plus an optional row of
+        punctuation <code>.,:;'&quot;!?()-/</code></span></label>
       <input type="file" id="sample" name="sample"
              accept="image/png,image/jpeg,image/bmp,image/tiff,image/webp">
       <p class="hint" style="margin:8px 0 0">
-        Leave empty to use the built-in handwriting font. Characters you don't
-        write (punctuation, etc.) fall back to it automatically.</p>
+        Leave empty to use the built-in handwriting font. Any characters you
+        don't write fall back to it automatically.</p>
     </div>
 
     <div class="card">

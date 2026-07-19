@@ -225,6 +225,10 @@ def _prompt_handwriting(
     ):
         return None
 
+    output_fn(
+        "Write A-Z, then a-z, then 0-9 — one row each. Add an optional 4th row "
+        "of punctuation .,:;'\"!?()-/ to letter those in your own hand too."
+    )
     while True:
         path = ask_path(
             "Path to your handwriting sample-sheet image",

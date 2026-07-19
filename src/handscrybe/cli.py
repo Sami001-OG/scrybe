@@ -57,9 +57,9 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="handwriting_image",
         default=None,
         help="Path to a photo/scan of your handwriting sample sheet "
-        "(A-Z, then a-z, then 0-9, one row each). Characters found on the "
-        "sheet render as your own handwriting; anything missing falls back to "
-        "the TTF font.",
+        "(A-Z, then a-z, then 0-9, one row each, plus an optional 4th row of "
+        "punctuation .,:;'\"!?()-/ ). Characters found on the sheet render as "
+        "your own handwriting; anything missing falls back to the TTF font.",
     )
     p.add_argument(
         "--mode",

@@ -55,7 +55,13 @@ import fitz  # PyMuPDF
 
 from .config import Config
 from .fonts import BOLD_STROKE_FACTOR, ITALIC_SHEAR, FontManager
-from .glyphs import GlyphSet
+from .glyphs import (
+    FALLBACK_SIZE_SCALE,
+    GLYPH_GAP_FRAC,
+    X_HEIGHT_RATIO,
+    GlyphSet,
+    glyph_advance,
+)
 from .model import PlacedPage, PlacedSpan
 
 
@@ -104,17 +110,34 @@ def _resolve_ink(color: tuple[float, float, float], config: Config) -> tuple[flo
     return color
 
 
-# Characters that hang below the baseline. When we composite fixed-height glyph
-# images (which have no shared baseline reference, since each was trimmed to its
-# own ink), we drop these so descenders read correctly instead of floating on the
-# line. The fraction is of font size.
-_DESCENDERS = set("gjpqy")
-_DESCENDER_DROP = 0.22
-# Target glyph height as a fraction of font size for composited handwriting
-# images. Uniform height keeps proportions predictable across a trimmed-glyph set
-# (we can't recover the writer's own relative sizing from independent crops); the
-# result reads as clean hand-lettering and sits neatly on the baseline.
-_GLYPH_HEIGHT = 0.92
+# X_HEIGHT_RATIO and GLYPH_GAP_FRAC are imported from glyphs.py — the single
+# source of truth shared with fonts.measure, so the width the fitting engine
+# budgets is exactly the width drawn here. `size` is the run's cap-height budget
+# from layout; hand x-height is ~0.52 of it, so caps come out tall, x-height
+# letters short, and descenders hang — all in proportion to what was measured.
+
+# Fallback height (fraction of font size) used ONLY when a glyph carries no
+# measured metrics at all — e.g. an older GlyphSet built before the metric fields
+# existed. In that case we can't recover relative sizing from independent crops,
+# so we drop back to a single uniform height that reads as clean hand-lettering
+# and sits on the baseline. Glyphs WITH metrics never use this.
+_FALLBACK_GLYPH_HEIGHT = 0.92
+
+
+def _glyph_metric(glyph, *names: str) -> float | None:
+    """Return the first present metric field on `glyph`, else None.
+
+    The glyph-fidelity metrics are consumed defensively for two reasons. First,
+    an older `GlyphSet` may predate the metric fields entirely, in which case we
+    must degrade gracefully to a uniform height rather than crash. Second, the
+    field names are read under both the `*_frac` and `*_ratio` spellings so the
+    renderer interoperates whichever the extractor lands — the two describe the
+    same normalized quantities (glyph ink measured in writer-x-height units)."""
+    for name in names:
+        value = getattr(glyph, name, None)
+        if value is not None:
+            return float(value)
+    return None
 
 
 def _tint_glyph_png(glyph, color: tuple[float, float, float]) -> bytes:
@@ -154,25 +177,71 @@ def _draw_glyph_image(
     hscale: float,
     color: tuple[float, float, float],
 ) -> None:
-    """Composite one handwriting-image glyph onto the page.
+    """Composite one handwriting-image glyph onto the page using measured metrics.
 
-    The glyph is scaled to a uniform target height (`_GLYPH_HEIGHT * size`),
-    keeps its natural aspect ratio (then squeezed by `hscale` horizontally, the
-    same squeeze layout applied), and is centered within the character's TTF
-    advance slot so inter-character spacing stays regular and matches what the
-    layout engine measured. Descender characters are dropped below the baseline
-    so they hang correctly."""
-    target_h = _GLYPH_HEIGHT * size
-    glyph_w = target_h * glyph.aspect * hscale
+    Each glyph was trimmed tight to its own ink, so on its own it carries no
+    shared baseline or relative size. The extractor recovers that context per
+    row and normalizes it to the writer's x-height, handing us three ratios on
+    the glyph: ink height, how far the ink rises above the baseline (ascent), and
+    how far it drops below it (descent), all in x-height units. We turn those
+    back into points through one ratio, `X_HEIGHT_RATIO`, which pins the writer's
+    x-height to a fraction of the run's cap-size `size`. The payoff is real
+    handwriting proportions: capitals stand tall, x-height letters sit short,
+    and g/j/p/q/y hang below the line — because the descent is *measured*, not
+    guessed from a hardcoded character list.
+
+    Vertical placement follows straight from the metrics::
+
+        xheight_pt = size * X_HEIGHT_RATIO         # writer x-height in points
+        draw_h     = h_frac * xheight_pt           # ink height on the page
+        bottom     = baseline_y + descent_frac * xheight_pt   # ink bottom
+        top        = bottom - draw_h                          # ink top
+
+    so the ink bottom sits below the baseline exactly as far as the writer's did
+    (zero for non-descenders) and the top rises by the measured ascent.
+
+    Horizontal placement is deliberately unchanged from the uniform-height era:
+    the glyph is centered within the character's TTF advance slot and squeezed by
+    `hscale`, so inter-character spacing still equals what the layout engine
+    budgeted. Only vertical size/position and the width derivation change here;
+    the caller's advance stepping is untouched.
+
+    If a glyph predates the metric fields (all three read None), we fall back to
+    the previous uniform-height, baseline-resting behavior so older glyph sets
+    still render sensibly — just without per-glyph relative sizing."""
+    h_frac = _glyph_metric(glyph, "h_frac", "height_ratio")
+    descent_frac = _glyph_metric(glyph, "descent_frac", "descent_ratio")
+
+    if h_frac is None:
+        # No measured metrics: reproduce the old uniform-height look. The glyph
+        # keeps its natural aspect and rests its bottom on the baseline.
+        draw_h = _FALLBACK_GLYPH_HEIGHT * size
+        glyph_w = draw_h * glyph.aspect * hscale
+        bottom = baseline_y
+    else:
+        # Metric-driven placement. One ratio maps x-height units to points; the
+        # ink bottom drops below the baseline by the measured descent (>=0).
+        xheight_pt = size * X_HEIGHT_RATIO
+        draw_h = h_frac * xheight_pt
+        # Width prefers an explicit measured w_frac; absent that, we reconstruct
+        # it from the trimmed ink's aspect (w/h), which is equivalent since both
+        # describe the same ink box. hscale applies the layout squeeze either way.
+        w_frac = _glyph_metric(glyph, "w_frac")
+        if w_frac is not None:
+            glyph_w = w_frac * xheight_pt * hscale
+        else:
+            glyph_w = draw_h * glyph.aspect * hscale
+        drop = (descent_frac if descent_frac is not None else 0.0) * xheight_pt
+        bottom = baseline_y + drop
+
     slot_w = advance * hscale
     # Center the glyph in its advance slot; if it's wider than the slot (rare,
     # very wide chars) it simply overhangs symmetrically, which looks natural.
     gx0 = x + (slot_w - glyph_w) / 2.0
-    drop = _DESCENDER_DROP * size if glyph.char in _DESCENDERS else 0.0
-    # Rect is (x0, top, x1, bottom) in y-down page space. Bottom sits on the
-    # baseline (plus any descender drop); top is one glyph-height above it.
-    bottom = baseline_y + drop
-    top = bottom - target_h
+    # Rect is (x0, top, x1, bottom) in y-down page space. `bottom` already
+    # carries the measured descent below the baseline; `top` is one draw-height
+    # above it, so the measured ascent falls out naturally.
+    top = bottom - draw_h
     rect = fitz.Rect(gx0, top, gx0 + glyph_w, bottom)
     if rect.is_empty or rect.is_infinite:
         return
@@ -249,29 +318,48 @@ def _draw_span(
     # producing hscale-correct final positions.
     dx = 0.0
     for ch in text:
-        advance = font.text_length(ch, fontsize=size)
         glyph = glyphs.get(ch) if glyphs is not None else None
+        ttf_advance = font.text_length(ch, fontsize=size)
+        # ONE advance rule, shared with fonts.measure via glyph_advance: for a
+        # sampled character the pen steps by the glyph's real ink width plus a
+        # fixed inter-letter gap (≈1.5x the TTF advance), which is what keeps
+        # letters from piling on top of one another. Unsampled characters keep
+        # the TTF advance. Because layout budgeted with this same helper, the
+        # summed advances still fit the line and pagination is unchanged.
+        advance = glyph_advance(glyph, ch, size, ttf_advance)
         if glyph is not None and glyph.aspect > 0:
             # User-handwriting image path. Position uses the un-scaled dx as the
             # left of the advance slot; _draw_glyph_image applies hscale inside
-            # the slot, matching the TTF morph's scaling about the origin.
+            # the slot, matching the TTF morph's scaling about the origin. The
+            # slot is now ink-width + gap, so centering the ink leaves half the
+            # gap on each side — natural inter-letter breathing room.
             _draw_glyph_image(
                 page, glyph, ox + hscale * dx, oy, advance, size, hscale, color
             )
         else:
             point = fitz.Point(ox + dx, oy)
+            # TTF fallback (character not in the handwriting sample). Draw at the
+            # REDUCED fallback size so the fallback face (Caveat) doesn't tower
+            # over the ~x-height handwriting beside it — a full-size comma next to
+            # 6pt hand-lettering reads as a blob. The pen sits on the same
+            # baseline `oy`, so the smaller glyph still rests on the line. The
+            # advance was already scaled by the same factor in glyph_advance, so
+            # spacing stays consistent with what layout budgeted.
+            fb_size = size * FALLBACK_SIZE_SCALE
             # insert_text draws with the embedded fontfile; render_mode/
             # border_width give us the synthetic-bold stroke. morph applies
             # scale+shear per glyph about the shared span origin.
             page.insert_text(
                 point,
                 ch,
-                fontsize=size,
+                fontsize=fb_size,
                 fontname=fontname,
                 fontfile=ttf_path,
                 color=color,
                 fill=color,
-                border_width=border_width if border_width else 0.05,
+                border_width=(border_width * FALLBACK_SIZE_SCALE)
+                if border_width
+                else 0.05,
                 render_mode=render_mode,
                 stroke_opacity=1.0,
                 fill_opacity=1.0,

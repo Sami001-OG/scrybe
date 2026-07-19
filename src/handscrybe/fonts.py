@@ -75,6 +75,15 @@ class FontManager:
         # reused for synthesized bold/italic) is only loaded once.
         self._fonts: dict[str, fitz.Font] = {}
 
+        # Optional handwriting glyph set. When set (via `set_glyphs`), width
+        # measurement advances by each character's REAL handwriting width for
+        # sampled characters, so the fitting engine budgets exactly what the
+        # renderer draws. Left None => pure TTF measurement (original behavior).
+        # This must be wired before layout runs, or the engine would budget with
+        # narrow TTF advances while render draws wide handwriting — the two would
+        # disagree and glyphs would overlap.
+        self._glyphs = None
+
         # Validate only the regular face eagerly: it's the mandatory base every
         # style falls back to, and a missing base is a setup error worth failing
         # fast on. Bold/italic faces are optional (may be None or synthesized),
@@ -87,6 +96,13 @@ class FontManager:
                 "See the project README for recommended handwriting fonts "
                 "(e.g. Caveat-Regular.ttf)."
             )
+
+    def set_glyphs(self, glyphs) -> None:
+        """Attach a handwriting `GlyphSet` so measurement is glyph-aware.
+
+        Called once by the pipeline after the sample sheet is segmented and
+        before layout runs. Idempotent; pass None to revert to TTF-only widths."""
+        self._glyphs = glyphs
 
     def _load(self, ttf_path: str) -> fitz.Font:
         """Return the cached `fitz.Font` for a path, loading on first use."""
@@ -120,13 +136,30 @@ class FontManager:
     def measure(self, text: str, style: FontStyle, size: float) -> float:
         """Return the rendered width of `text` in points at the given size.
 
-        This is the primitive the fitting engine budgets against. It uses the
-        face that would actually be drawn for `style`, and inflates the result
-        when bold is synthesized because stroke widening makes glyphs wider than
-        their base outline (which is all text_length can see). Synthetic italic
-        shear doesn't change advance width, so it isn't compensated here."""
+        This is the primitive the fitting engine budgets against, so it must
+        reflect the width the renderer will actually draw, character by
+        character. When a handwriting `GlyphSet` is attached, each character's
+        advance comes from `glyphs.glyph_advance` — the SAME helper render steps
+        by — so sampled characters are budgeted at their true (wider) handwriting
+        width and never overlap. Characters with no sampled glyph fall back to
+        the TTF advance for that single character, matching render's fallback.
+
+        Bold synthesis widens glyphs by stroke, which `text_length` can't see, so
+        we inflate by `_SYNTH_BOLD_WIDTH_FACTOR`. That applies to the TTF-drawn
+        parts; handwriting-image glyphs aren't stroked, but applying the small
+        (~3%) factor uniformly keeps measurement simple and slightly conservative
+        (never under-budgets), which is the safe direction for fitting."""
         resolved = self.resolve(style)
-        width = resolved.font.text_length(text, fontsize=size)
+        font = resolved.font
+        if self._glyphs is None:
+            width = font.text_length(text, fontsize=size)
+        else:
+            from .glyphs import glyph_advance
+
+            width = 0.0
+            for ch in text:
+                ttf_adv = font.text_length(ch, fontsize=size)
+                width += glyph_advance(self._glyphs.get(ch), ch, size, ttf_adv)
         if resolved.synth_bold:
             width *= _SYNTH_BOLD_WIDTH_FACTOR
         return width

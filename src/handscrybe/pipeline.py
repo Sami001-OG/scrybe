@@ -113,6 +113,12 @@ def convert(
 
         report(0.03, "Reading your handwriting sample")
         glyphs = GlyphSet.from_sheet(config.handwriting_image)
+        # Make width measurement glyph-aware: the fitting engine must budget the
+        # REAL handwriting width of each sampled character (≈1.5x the TTF advance)
+        # or the renderer's wider glyphs would overlap. This wires the same
+        # advance helper render uses into fonts.measure, keeping layout and render
+        # in agreement so pagination stays invariant while spacing comes out right.
+        fonts.set_glyphs(glyphs)
 
     # DOCX conversion needs a scratch directory for the intermediate PDF (and
     # LibreOffice's throwaway user profile). A PDF input skips this entirely,

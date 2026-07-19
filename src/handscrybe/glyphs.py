@@ -9,36 +9,53 @@ as a photo/scan of a sample sheet laid out as
     A B C ... Z
     a b c ... z
     0 1 2 ... 9
+    . , : ; ' " ! ? ( ) - /   (optional 4th row)
 
 We segment that image into individual character images and expose them as
-`GlyphSet`, a dict-like ``char -> RGBA PIL.Image`` where the ink is opaque and
-the paper is transparent. render.py composites those glyphs, tinted to each
-run's color, into the same advance boxes the TTF would have used — so layout
-math (which stays TTF-based and already tested) is untouched and only the
-*appearance* of each glyph changes.
+`GlyphSet`, a dict-like ``char -> Glyph`` where each glyph is an RGBA image (ink
+opaque, paper transparent) plus a handful of baseline-relative size metrics.
+render.py composites those glyphs, tinted to each run's color, into the same
+advance boxes the TTF would have used — so layout math (which stays TTF-based
+and already tested) is untouched and only the *appearance* of each glyph
+changes. The metrics let render place each glyph with its natural relative
+height and descent instead of forcing every character to one uniform height.
 
 SEGMENTATION STRATEGY
 ---------------------
 We use projection profiles rather than ML, because it's deterministic and
 debuggable:
 
-1.  Load, grayscale, and binarize (Otsu threshold) so ink=1, paper=0.
+1.  Load, grayscale, and binarize so ink=1, paper=0. Binarization is *adaptive*
+    (local block threshold via an integral-image background estimate) so ruled
+    or grid paper and uneven lighting don't wreck the mask; long thin ruling
+    runs are additionally suppressed.
 2.  Horizontal projection (ink per row) -> split into text ROWS at the vertical
     gaps between lines.
 3.  Within each row, vertical projection (ink per column) -> split into
-    character BOXES at the horizontal gaps between letters.
+    character BOXES at the horizontal gaps between letters. The per-row box
+    count is reconciled *bidirectionally* against the expected count: too few
+    boxes (touching letters) are split at ink valleys; too many boxes
+    (over-segmentation, e.g. the digit row producing 11 boxes for 10 chars) are
+    merged at the smallest inter-box gap. This keeps a single stray box from
+    shifting every following character onto the wrong glyph.
 4.  Walk the boxes in reading order (top row left-to-right, then next row) and
     zip them against the expected character sequence. Whatever we successfully
     pair becomes a glyph; anything missing simply falls back to the TTF at
     render time, so a partial or imperfect scan still produces output.
 
-Each glyph is trimmed to its ink, converted to RGBA with alpha = ink darkness
-(so anti-aliased edges stay soft), and stored with its aspect ratio for
-placement. Tinting to a target pen color happens later, per draw, so one glyph
-serves any color.
+Per row we also derive a stable scale unit (the row x-height = median trimmed
+box height) and a robust baseline (median of the dominant cluster of box
+bottoms, so descenders don't drag it down). Every glyph then records its height,
+width, ascent and descent as fractions of that x-height, which is all render
+needs to place glyphs proportionally on a shared baseline.
 
-Dependencies: Pillow (image IO) and numpy (projections). No PDF/font imports —
-this module is about pixels only, which keeps it unit-testable in isolation.
+Each glyph is trimmed to its ink, converted to RGBA with alpha = ink darkness
+(so anti-aliased edges stay soft). Tinting to a target pen color happens later,
+per draw, so one glyph serves any color.
+
+Dependencies: Pillow (image IO) and numpy (projections + integral images). No
+scipy/cv2, no PDF/font imports — this module is about pixels only, which keeps
+it unit-testable in isolation.
 """
 
 from __future__ import annotations
@@ -54,23 +71,180 @@ from PIL import Image
 UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 LOWER = "abcdefghijklmnopqrstuvwxyz"
 DIGITS = "0123456789"
-DEFAULT_ORDER = UPPER + LOWER + DIGITS
+# Fourth (optional) row: punctuation the user can add to the sample sheet so
+# these marks render in their own hand instead of falling back to the TTF. The
+# order is fixed so the segmenter can pair boxes positionally like the other
+# rows. A sheet without this row still works — the marks just fall back.
+PUNCT = ".,:;'\"!?()-/"
+DEFAULT_ORDER = UPPER + LOWER + DIGITS + PUNCT
+
+# --- Shared handwriting-advance geometry ---------------------------------
+# These two constants are the single source of truth for how wide a handwriting
+# glyph is on the page. BOTH layout measurement (fonts.measure, which drives the
+# fitting engine) and render stepping import them, so the width the engine
+# budgets is exactly the width the renderer draws. If they diverged, glyphs
+# would either overlap (render wider than budgeted) or spread apart (narrower).
+#
+# X_HEIGHT_RATIO pins the writer's x-height — the unit all glyph metrics are
+# normalized to — to a fraction of the run's cap-size `size`. Handwriting
+# x-height typically runs a little over half the cap size.
+X_HEIGHT_RATIO: float = 0.52
+
+# Inter-letter gap added after each handwriting glyph, as a fraction of the
+# writer's x-height. Glyph `w_frac` measures INK width only (the trimmed box),
+# so without an explicit gap adjacent letters would touch. This is the breathing
+# room between letters within a word; word spaces come from the space advance.
+GLYPH_GAP_FRAC: float = 0.18
+
+# Baseline-snap threshold. A letter whose measured ink-bottom sits within this
+# fraction of x-height BELOW the fitted baseline is treated as resting on the
+# baseline (descent snapped to 0). This flattens the small residual wobble that
+# made lines look wavy, while staying well under any true descender (g/j/p/q/y
+# hang ~0.4–0.75 x-height), which are left exactly as measured.
+_BASELINE_SNAP_FRAC: float = 0.16
+
+# Size multiplier for TTF FALLBACK glyphs (characters with no sampled
+# handwriting — typically punctuation). Goal: match the fallback face's X-HEIGHT
+# to the handwriting's, so a fallback comma/period sits proportionally beside the
+# hand-lettered words instead of looking like a different font pasted in.
+#
+# Derived by direct ink measurement, not font metrics (which mislead here): the
+# fallback face (Caveat) has an unusually small x-height, ~0.355 of its point
+# size, while the handwriting's x-height letters draw at ~0.437 of the run size
+# (median x-letter h_frac 0.84 * X_HEIGHT_RATIO). Matching the two =>
+# 0.437 / 0.355 ≈ 1.23, i.e. the fallback must be drawn slightly LARGER than the
+# run size to line its x-height up with the writing. Applied in BOTH
+# glyph_advance (width) and render (draw) so measurement and drawing never
+# disagree. Note: because Caveat's caps are large relative to its x-height, a
+# fallback CAPITAL comes out a bit tall — an acceptable trade since caps are
+# almost always present in the sample sheet and only punctuation truly falls
+# back in practice.
+FALLBACK_SIZE_SCALE: float = 1.23
+
+# Vertical placement of each punctuation mark, as a signed `descent_frac` in
+# x-height units: where the mark's INK BOTTOM sits relative to the writing
+# baseline. Positive hangs below the baseline (comma, paren), zero rests on it
+# (period, colon), negative floats above it (apostrophe up high, hyphen mid).
+#
+# Why a fixed table instead of measurement: for letters we fit a baseline
+# through a whole row of ink-bottoms, but a punctuation row is a sparse mix of
+# marks at wildly different vertical positions (a period on the baseline next to
+# an apostrophe near cap height), so a fitted baseline is meaningless. We instead
+# capture each mark's real INK (shape, size, width — all measured from the scan)
+# and only pin WHERE it sits from this typographic table. The drawn height stays
+# the mark's true ink height, so the writer's own dot/comma/paren shapes show
+# through; only vertical anchoring is prescribed.
+PUNCT_DESCENT: dict[str, float] = {
+    ".": 0.0,    # period rests on the baseline
+    ",": 0.22,   # comma tail dips below
+    ":": 0.0,    # colon dots span baseline..mid, bottom on baseline
+    ";": 0.22,   # semicolon has a comma tail
+    "'": -0.95,  # apostrophe floats up near cap height
+    '"': -0.95,  # double quote likewise
+    "!": 0.0,    # exclamation rests on baseline
+    "?": 0.0,    # question mark rests on baseline
+    "(": 0.28,   # parenthesis dips below the baseline
+    ")": 0.28,
+    "-": -0.42,  # hyphen floats at mid x-height
+    "/": 0.22,   # slash dips below
+}
+
+
+def glyph_advance(
+    glyph: "Glyph | None",
+    ch: str,
+    size: float,
+    ttf_advance: float,
+) -> float:
+    """Return the horizontal advance for one character, in points.
+
+    This is the ONE place that decides how far the pen moves after a character,
+    used identically by measurement (layout) and drawing (render) so the two can
+    never disagree about line width.
+
+    * If we have the user's handwriting for `ch`, the advance is the glyph's
+      measured INK width (``w_frac`` in x-height units, converted to points via
+      `X_HEIGHT_RATIO`) plus a fixed inter-letter gap (`GLYPH_GAP_FRAC`). This is
+      what makes words space correctly: the old code stepped by the TTF advance,
+      which is ~1.5x narrower than real handwriting, so glyphs piled on top of
+      one another. Stepping by the true ink width + a gap spaces them naturally.
+    * Otherwise (punctuation not sampled, or any missing char) we fall back to
+      the TTF advance the caller already computed, so unsampled characters keep
+      their previous, correct spacing.
+
+    `ttf_advance` is the width of the character in the fallback face at the run's
+    FULL size, passed in (rather than computed here) because computing it needs a
+    `fitz.Font`, which this pixel-only module deliberately never imports. On the
+    fallback path we scale it by `FALLBACK_SIZE_SCALE` because the renderer draws
+    fallback glyphs at that reduced size (see render); scaling the advance to
+    match keeps measurement and drawing in lockstep for unsampled characters too.
+    """
+    if glyph is not None and getattr(glyph, "w_frac", None):
+        xheight_pt = size * X_HEIGHT_RATIO
+        return glyph.w_frac * xheight_pt + GLYPH_GAP_FRAC * xheight_pt
+    return ttf_advance * FALLBACK_SIZE_SCALE
 
 
 @dataclass
 class Glyph:
-    """One extracted character. `image` is a tightly-trimmed RGBA image whose
-    alpha channel is the ink coverage (opaque ink, transparent paper). `aspect`
-    is width/height of the trimmed ink, used by the renderer to keep the glyph's
-    natural proportions when it scales the glyph to the font size."""
+    """One extracted character.
+
+    `image` is a tightly-trimmed RGBA image whose alpha channel is the ink
+    coverage (opaque ink, transparent paper). `aspect` is width/height of the
+    trimmed ink, used by the renderer to keep the glyph's natural proportions.
+
+    The ``*_frac`` fields are baseline-relative metrics, all expressed as
+    fractions of the glyph's ROW x-height (the median trimmed box height of that
+    row — a stable per-row scale unit). They exist so render can place a glyph
+    with its true relative size and descent instead of stretching every
+    character to one uniform height:
+
+    - ``h_frac``       — glyph ink height / row x-height (a cap > 1.0, an
+                         x-height letter ~1.0, a period ~0.15).
+    - ``w_frac``       — glyph ink width / row x-height (aspect is preserved via
+                         ``w_frac / h_frac``).
+    - ``ascent_frac``  — (row baseline - glyph ink top) / row x-height; how far
+                         the glyph rises above the baseline.
+    - ``descent_frac`` — (glyph ink bottom - row baseline) / row x-height,
+                         clamped >= 0; how far a descender (g/j/p/q/y) hangs
+                         below the baseline, 0 for non-descenders.
+
+    Invariant: ``h_frac ≈ ascent_frac + descent_frac``.
+
+    Defaults describe an old-style, uniform-height glyph sitting exactly on the
+    baseline, so pre-metrics constructors and tests keep working unchanged.
+    """
 
     char: str
     image: Image.Image  # RGBA, trimmed to ink
+
+    # Baseline-relative metrics; see class docstring. Safe defaults = a plain
+    # x-height glyph resting on the baseline with no descender.
+    h_frac: float = 1.0
+    w_frac: float = 1.0
+    ascent_frac: float = 1.0
+    descent_frac: float = 0.0
 
     @property
     def aspect(self) -> float:
         w, h = self.image.size
         return (w / h) if h else 1.0
+
+    # --- Spec-named aliases -------------------------------------------------
+    # The shared fidelity spec refers to these metrics as ``*_ratio``; render
+    # and other consumers may use either spelling. They are read-only views onto
+    # the canonical ``*_frac`` fields so there is a single source of truth.
+    @property
+    def height_ratio(self) -> float:
+        return self.h_frac
+
+    @property
+    def ascent_ratio(self) -> float:
+        return self.ascent_frac
+
+    @property
+    def descent_ratio(self) -> float:
+        return self.descent_frac
 
 
 def _otsu_threshold(gray: np.ndarray) -> float:
@@ -103,19 +277,147 @@ def _otsu_threshold(gray: np.ndarray) -> float:
     return threshold
 
 
+def _box_mean(a: np.ndarray, radius: int) -> np.ndarray:
+    """Mean over a ``(2*radius+1)`` square window at every pixel, edge-clamped.
+
+    Computed from an integral image (summed-area table) so it is O(H*W)
+    regardless of window size — the large windows used for background estimation
+    would be far too slow as an explicit convolution, and we can't lean on
+    scipy/cv2. The window is clipped at borders (count reflects the clipped
+    area) so no wrap-around artifacts appear at the page edges."""
+    a = a.astype(np.float64)
+    H, W = a.shape
+    ii = np.zeros((H + 1, W + 1), dtype=np.float64)
+    ii[1:, 1:] = np.cumsum(np.cumsum(a, axis=0), axis=1)
+
+    ys = np.arange(H)
+    xs = np.arange(W)
+    y0 = np.clip(ys - radius, 0, H)
+    y1 = np.clip(ys + radius + 1, 0, H)
+    x0 = np.clip(xs - radius, 0, W)
+    x1 = np.clip(xs + radius + 1, 0, W)
+
+    Y0 = y0[:, None]
+    Y1 = y1[:, None]
+    X0 = x0[None, :]
+    X1 = x1[None, :]
+    total = ii[Y1, X1] - ii[Y0, X1] - ii[Y1, X0] + ii[Y0, X0]
+    count = (Y1 - Y0) * (X1 - X0)
+    return total / count
+
+
+def _win_sum(a: np.ndarray, length: int, axis: int) -> np.ndarray:
+    """Centered sliding-window sum of `length` along `axis`, border-clipped.
+
+    A tiny cumulative-sum primitive used to build 1-D morphological openings for
+    ruling detection without scipy. Border windows are clipped, so the returned
+    count at the edges is smaller than `length` (which conveniently means edge
+    pixels can never be mistaken for the center of a full-length run)."""
+    if axis == 0:
+        return _win_sum(a.T, length, 1).T
+    a = a.astype(np.int64)
+    H, W = a.shape
+    cs = np.zeros((H, W + 1), dtype=np.int64)
+    cs[:, 1:] = np.cumsum(a, axis=1)
+    idx = np.arange(W)
+    left = length // 2
+    right = length - 1 - left
+    lo = np.clip(idx - left, 0, W)
+    hi = np.clip(idx + right + 1, 0, W)
+    return cs[:, hi] - cs[:, lo]
+
+
+def _open_axis(ink: np.ndarray, length: int, axis: int) -> np.ndarray:
+    """1-D morphological opening (erode then dilate) with a `length` flat SE.
+
+    Keeps only ink runs at least `length` long along `axis`. Used both to find
+    long ruling runs (open along the line's own axis with a big length) and to
+    test thickness (open across the line with a small length)."""
+    eroded = _win_sum(ink.astype(np.int64), length, axis) == length
+    dilated = _win_sum(eroded.astype(np.int64), length, axis) >= 1
+    return dilated
+
+
+def _suppress_rulings(ink: np.ndarray) -> np.ndarray:
+    """Remove long thin horizontal/vertical ruling runs from the ink mask.
+
+    Grid and ruled paper add lines that span most of the page width/height at a
+    small, near-constant thickness. Left in, they bridge letters and rows and
+    ruin projection segmentation. We detect a ruling as ink that is (a) long
+    along one axis — an opening with a length of ~half the page dimension keeps
+    only runs that long — and (b) thin across the other axis — it must NOT
+    survive a small opening across its width (a genuine tall/thick stroke
+    would). Only pixels that are long-and-thin are removed, so real strokes,
+    which are short relative to the page or thick, are preserved.
+
+    A safety valve: if this would erase more than half the ink the detector has
+    clearly misfired (e.g. a dense scan), so we return the mask untouched."""
+    H, W = ink.shape
+    if ink.sum() == 0:
+        return ink
+
+    long_h = max(8, int(round(W * 0.5)))
+    long_v = max(8, int(round(H * 0.5)))
+    max_thick = max(2, int(round(min(H, W) * 0.012)))
+
+    remove = np.zeros_like(ink, dtype=bool)
+
+    # Horizontal rulings: long along x, thin along y.
+    h_runs = _open_axis(ink, long_h, axis=1)
+    tall = _open_axis(ink, max_thick + 1, axis=0)  # vertically thick ink
+    remove |= h_runs & ~tall
+
+    # Vertical rulings: long along y, thin along x.
+    v_runs = _open_axis(ink, long_v, axis=0)
+    wide = _open_axis(ink, max_thick + 1, axis=1)  # horizontally thick ink
+    remove |= v_runs & ~wide
+
+    if remove.sum() > ink.sum() * 0.5:
+        return ink
+    return ink & ~remove
+
+
 def _binarize(path: str) -> np.ndarray:
     """Load an image and return a boolean ink mask (True = ink).
 
-    Ink is assumed darker than paper (pen on white), so we threshold below
-    Otsu. We also guard against inverted scans by flipping if the 'ink' would
-    otherwise cover most of the page."""
+    Global Otsu alone fails on the real target: grid/ruled paper and uneven
+    lighting mean no single global threshold cleanly separates pen from paper.
+    Instead we threshold *locally*:
+
+    1. Normalize orientation — global Otsu tells us whether the dark class is
+       the majority (a light-on-dark / inverted scan); if so we invert once so
+       the rest of the routine can assume dark ink on light paper.
+    2. Estimate the paper background with a large-window box mean (integral
+       image, so it's cheap). Subtract it to get per-pixel "darkness relative to
+       local background" — this cancels gradients and faint uniform grid tint.
+    3. Otsu on that residual picks the ink/paper split adaptively; ``darkness >
+       max(t, 1)`` keeps a truly blank sheet empty rather than all-ink.
+
+    A final guard flips the result if it still somehow marks most of the page as
+    ink, and long thin ruling runs are stripped (see `_suppress_rulings`)."""
     img = Image.open(path).convert("L")
     gray = np.asarray(img, dtype=np.uint8)
-    t = _otsu_threshold(gray)
-    ink = gray < t  # darker than threshold = ink
-    # If more than 50% is "ink", the image was probably light-on-dark; invert.
+
+    # Normalize an inverted (light-on-dark) scan to dark-ink-on-light.
+    tg = _otsu_threshold(gray)
+    if (gray < tg).mean() > 0.5:
+        gray = 255 - gray
+
+    H, W = gray.shape
+    # Background window: large enough to average paper (many stroke-widths
+    # across) yet bounded so it stays a background, not a global, estimate.
+    radius = max(15, min(H, W) // 8)
+    background = _box_mean(gray, radius)
+
+    darkness = np.clip(background - gray.astype(np.float64), 0, 255).astype(np.uint8)
+    t = _otsu_threshold(darkness)
+    ink = darkness > max(t, 1.0)
+
+    # If "ink" covers most of the page the split inverted; flip it back.
     if ink.mean() > 0.5:
         ink = ~ink
+
+    ink = _suppress_rulings(ink)
     return ink
 
 
@@ -208,14 +510,62 @@ def _split_wide_box(
     return pieces
 
 
+def _reconcile_span_count(
+    col_spans: list[tuple[int, int]], col_profile: np.ndarray, expected: int
+) -> list[tuple[int, int]]:
+    """Force the number of column spans toward ``expected``, both directions.
+
+    Projection segmentation is never exact on a hand-written row, and the error
+    goes BOTH ways:
+
+    - Too FEW spans: neighboring letters touched and merged. We split the widest
+      remaining span at its deepest ink valley, one cut at a time, re-picking the
+      widest each round so cuts land wherever letters actually joined.
+    - Too MANY spans: a letter over-segmented (a broken stroke, a gap inside a
+      character, or — the verified digit-row bug — ``0-9`` yielding 11 spans for
+      10 chars). Left alone, one surplus span shifts every following character
+      onto the wrong glyph. We fix it by greedily MERGING the adjacent span pair
+      with the smallest inter-span gap, fusing the pair that is most likely two
+      fragments of one character, until the count matches.
+
+    This is deliberately symmetric with the split path: both nudge the count to
+    ``expected`` before assignment so a single stray box never cascades."""
+    if expected <= 0 or not col_spans:
+        return col_spans
+
+    spans = list(col_spans)
+
+    # Too few: split the widest span at its deepest valley until we catch up.
+    while len(spans) < expected:
+        widest_i = max(range(len(spans)), key=lambda i: spans[i][1] - spans[i][0])
+        c0, c1 = spans[widest_i]
+        pieces = _split_wide_box(c0, c1, col_profile, 1)
+        if len(pieces) == 1:
+            break  # can't split further; accept a short row
+        spans[widest_i : widest_i + 1] = pieces
+
+    # Too many: merge the closest-adjacent pair (smallest gap) until we match.
+    # The gap between span i and i+1 is spans[i+1].start - spans[i].end; the
+    # smallest gap is the seam most likely to be two fragments of one glyph.
+    while len(spans) > expected:
+        gaps = [spans[i + 1][0] - spans[i][1] for i in range(len(spans) - 1)]
+        i = min(range(len(gaps)), key=lambda k: gaps[k])
+        spans[i : i + 2] = [(spans[i][0], spans[i + 1][1])]
+
+    return spans
+
+
 def _row_char_boxes(
     ink: np.ndarray, r0: int, r1: int, expected: int
 ) -> list[tuple[int, int, int, int]]:
     """Return character boxes for a single text row, trying to hit ``expected``.
 
-    Splits the row into column spans, then if it found fewer than expected
-    (touching letters) it splits the widest spans at ink valleys until the count
-    matches. Each box is vertically tightened to its own ink."""
+    Splits the row into column spans, reconciles the span count toward
+    ``expected`` in BOTH directions (split touching letters when too few, merge
+    over-segmented fragments when too many — see `_reconcile_span_count`), then
+    vertically tightens each surviving span to its own ink. Returning exactly
+    ``expected`` boxes wherever possible is what keeps the later zip against the
+    expected characters aligned."""
     h, w = ink.shape
     band = ink[r0:r1, :]
     col_profile = band.sum(axis=0)
@@ -223,18 +573,7 @@ def _row_char_boxes(
     col_min_gap = max(2, int(round(w * 0.008)))
     col_spans = _segments_from_projection(col_profile, col_min_run, col_min_gap)
 
-    # Recover merged letters: while short of the expected count, split the widest
-    # remaining span at its deepest ink valley. Doing it one cut at a time and
-    # re-picking the widest keeps splits distributed across whichever letters
-    # actually touched, rather than hammering a single span.
-    if expected > 0:
-        while len(col_spans) < expected:
-            widest_i = max(range(len(col_spans)), key=lambda i: col_spans[i][1] - col_spans[i][0])
-            c0, c1 = col_spans[widest_i]
-            pieces = _split_wide_box(c0, c1, col_profile, 1)
-            if len(pieces) == 1:
-                break  # can't split further; accept a short row
-            col_spans[widest_i : widest_i + 1] = pieces
+    col_spans = _reconcile_span_count(col_spans, col_profile, expected)
 
     boxes: list[tuple[int, int, int, int]] = []
     for (c0, c1) in col_spans:
@@ -246,6 +585,101 @@ def _row_char_boxes(
         tr1 = r0 + int(rows_with_ink[-1]) + 1
         boxes.append((c0, tr0, c1, tr1))
     return boxes
+
+
+def _row_baseline(bottoms: list[int], ref_height: float) -> float:
+    """Robustly estimate a row's baseline from its box ink-bottoms.
+
+    Most letters — x-height letters, ascenders and caps alike — rest ON the
+    baseline, so their ink-bottoms coincide. Descenders (g j p q y) hang below,
+    pulling any naive mean/median of *all* bottoms downward. So instead of the
+    plain median we find the dominant CLUSTER of bottoms: for each bottom, count
+    how many others fall within a tight band (a fraction of the row's x-height),
+    take the densest such group, and use its median. Ties in density are broken
+    toward the SMALLER y (higher up the page) — i.e. the cluster near the top of
+    the bottom-range — because that is the true baseline; the lower cluster is
+    the descenders. Descenders, being a minority, never win the count.
+
+    This returns a single scalar baseline (a flat line). For slanted samples use
+    `_fit_baseline`, which returns a tilted line; this scalar version is kept as
+    the fallback when there are too few boxes to fit a slope reliably."""
+    arr = np.sort(np.asarray(bottoms, dtype=np.float64))
+    if arr.size == 0:
+        return 0.0
+    if arr.size == 1:
+        return float(arr[0])
+
+    tol = max(1.0, 0.18 * ref_height)
+    best_i = 0
+    best_count = -1
+    # Ascending order + strict-greater update keeps, among equal-density
+    # clusters, the one with the smallest bottom (top of the bottom-range).
+    for i in range(arr.size):
+        count = int(np.sum(np.abs(arr - arr[i]) <= tol))
+        if count > best_count:
+            best_count = count
+            best_i = i
+    center = arr[best_i]
+    cluster = arr[np.abs(arr - center) <= tol]
+    return float(np.median(cluster))
+
+
+def _fit_baseline(
+    centers: list[float], bottoms: list[int], ref_height: float
+) -> tuple[float, float]:
+    """Fit a (possibly tilted) baseline line ``y = slope*x + intercept`` through
+    a row's box ink-bottoms, robust to descenders.
+
+    A single horizontal baseline is wrong for real handwriting: samples are
+    almost always written with a slight upward or downward tilt, so the
+    ink-bottoms of baseline-resting letters drift linearly across the row. If we
+    force a flat baseline, letters on the "low" end of the tilt pick up a false
+    descent (their bottom sits below the flat line) and letters on the "high"
+    end lose real descent — exactly the artifact seen on a slanted sheet where
+    flat glyphs like ``E`` or ``0`` wrongly appear to hang below the line.
+
+    We fit a line instead. Descenders (a minority) would drag a plain
+    least-squares fit downward, so we fit iteratively: start from an all-points
+    least-squares line (which captures the tilt direction), then repeatedly drop
+    points sitting more than a tolerance BELOW the current line (the descenders)
+    and refit on the survivors (the true baseline letters). ``x`` is the glyph's
+    horizontal center; ``y`` its ink bottom. Returns ``(slope, intercept)`` in
+    pixel space. Falls back to a flat line at the robust scalar baseline when
+    there are too few points to fit a slope."""
+    xs = np.asarray(centers, dtype=np.float64)
+    ys = np.asarray(bottoms, dtype=np.float64)
+    n = xs.size
+    if n == 0:
+        return 0.0, 0.0
+    if n < 3:
+        # Too few points to trust a slope; use a flat robust baseline.
+        return 0.0, _row_baseline([int(b) for b in bottoms], ref_height)
+
+    # Descenders hang well below the baseline (~0.5–0.8 x-height in practice);
+    # a tolerance around a third of the x-height cleanly separates baseline
+    # letters (near/above the line) from descenders (far below) after the first
+    # fit has picked up the tilt.
+    tol = max(1.0, 0.30 * ref_height)
+
+    def _lstsq(mask: np.ndarray) -> tuple[float, float]:
+        A = np.vstack([xs[mask], np.ones(int(mask.sum()))]).T
+        sol, *_ = np.linalg.lstsq(A, ys[mask], rcond=None)
+        return float(sol[0]), float(sol[1])
+
+    # Seed with an all-points fit so the slope reflects the row's actual tilt.
+    slope, intercept = _lstsq(np.ones(n, dtype=bool))
+    for _ in range(3):
+        resid = ys - (slope * xs + intercept)  # >0 means below the line
+        inliers = resid <= tol
+        if int(inliers.sum()) < 2:
+            break
+        new_slope, new_intercept = _lstsq(inliers)
+        # Stop once the fit settles, to avoid needless churn on clean rows.
+        if abs(new_slope - slope) < 1e-4 and abs(new_intercept - intercept) < 1e-3:
+            slope, intercept = new_slope, new_intercept
+            break
+        slope, intercept = new_slope, new_intercept
+    return slope, intercept
 
 
 def _row_spans(ink: np.ndarray) -> list[tuple[int, int]]:
@@ -348,17 +782,22 @@ class GlyphSet:
         would let one merge shift every following character by one, corrupting
         the whole sheet.)
 
-        Within a row we also actively recover merged letters: when a row yields
-        fewer boxes than its expected character count, the widest boxes are split
-        at ink valleys (see `_row_char_boxes`) until the counts line up. Whatever
-        still can't be paired is simply left out and falls back to the TTF at
-        render time, so an imperfect scan degrades gracefully instead of failing.
+        Within a row the box count is reconciled bidirectionally against the
+        expected count (split touching letters, merge over-segmented fragments),
+        so both under- and over-segmentation are corrected before assignment.
+        Whatever still can't be paired is simply left out and falls back to the
+        TTF at render time, so an imperfect scan degrades gracefully.
+
+        Per row we also compute a stable scale unit (x-height = median trimmed
+        box height) and a robust baseline (dominant cluster of box bottoms), and
+        record each glyph's height/width/ascent/descent as fractions of the
+        x-height so render can place glyphs proportionally on a shared baseline.
         """
         if not os.path.isfile(image_path):
             raise FileNotFoundError(f"Handwriting sample image not found: {image_path}")
 
         if rows is None:
-            rows = [UPPER, LOWER, DIGITS]
+            rows = [UPPER, LOWER, DIGITS, PUNCT]
 
         ink = _binarize(image_path)
         gray = np.asarray(Image.open(image_path).convert("L"), dtype=np.uint8)
@@ -366,16 +805,127 @@ class GlyphSet:
         detected_rows = _row_spans(ink)
         aligned = _align_rows(detected_rows, rows)
 
+        # A row is "punctuation" when every expected char is a punctuation mark.
+        # Punctuation is handled in a SECOND pass because it can't establish its
+        # own scale or baseline: a row mixing a period, an apostrophe and a paren
+        # has no meaningful median height or fitted baseline. We first process the
+        # letter/digit rows (which do), collect their x-height units, and reuse a
+        # global x-height to normalize punctuation so a tiny period isn't blown up
+        # to letter size.
+        def _is_punct_row(expected: str) -> bool:
+            stripped = [c for c in expected if c != " "]
+            return bool(stripped) and all(c in PUNCT for c in stripped)
+
+        letter_rows = [(band, exp) for band, exp in aligned if not _is_punct_row(exp)]
+        punct_rows = [(band, exp) for band, exp in aligned if _is_punct_row(exp)]
+
         glyphs: dict[str, Glyph] = {}
-        for (r0, r1), expected_chars in aligned:
+        ref_heights: list[float] = []
+
+        # --- Pass 1: letter/digit rows (measured baseline + per-row x-height) ---
+        for (r0, r1), expected_chars in letter_rows:
             chars = [c for c in expected_chars if c != " "]
             boxes = _row_char_boxes(ink, r0, r1, expected=len(chars))
+            if not boxes:
+                continue
+
+            # Per-row scale unit and baseline. x-height = median trimmed box
+            # height (robust and cheap). The baseline is fit as a (possibly
+            # tilted) LINE through the box ink-bottoms rather than a single
+            # scalar: real samples are written with a slight tilt, so a flat
+            # baseline gives letters on the low end a false descent and robs the
+            # high end of real descent. `_fit_baseline` returns slope/intercept
+            # robust to descenders; each glyph is then measured against the
+            # baseline evaluated at its own horizontal center. Guard against a
+            # degenerate zero unit.
+            heights = [br1 - br0 for (_, br0, _, br1) in boxes]
+            ref_height = float(np.median(heights)) if heights else 1.0
+            if ref_height <= 0:
+                ref_height = 1.0
+            ref_heights.append(ref_height)
+            bottoms = [br1 for (_, _, _, br1) in boxes]
+            centers = [(c0 + c1) / 2.0 for (c0, _, c1, _) in boxes]
+            slope, intercept = _fit_baseline(centers, bottoms, ref_height)
+
             for ch, (c0, br0, c1, br1) in zip(chars, boxes):
                 gray_crop = gray[br0:br1, c0:c1]
                 ink_crop = ink[br0:br1, c0:c1]
                 if gray_crop.size == 0:
                     continue
-                glyphs[ch] = Glyph(char=ch, image=_to_rgba_glyph(gray_crop, ink_crop))
+
+                # Baseline y at this glyph's horizontal center along the tilted
+                # line. Measuring ascent/descent against the local baseline is
+                # what removes the slant artifact.
+                cx = (c0 + c1) / 2.0
+                baseline = slope * cx + intercept
+
+                h_frac = (br1 - br0) / ref_height
+                w_frac = (c1 - c0) / ref_height
+                ascent_frac = (baseline - br0) / ref_height
+                descent_frac = max(0.0, (br1 - baseline) / ref_height)
+
+                # Baseline jitter cleanup: a flat-bottomed letter (E, o, m) should
+                # rest exactly on the baseline, but residual fit error leaves it a
+                # few percent of x-height above/below, so lines look wavy. Snap
+                # small descents to zero and fold the slack into ascent, which
+                # flattens the baseline for resting glyphs while leaving true
+                # descenders (g/j/p/q/y, descent >> the threshold) untouched.
+                if descent_frac < _BASELINE_SNAP_FRAC:
+                    ascent_frac += descent_frac
+                    descent_frac = 0.0
+
+                glyphs[ch] = Glyph(
+                    char=ch,
+                    image=_to_rgba_glyph(gray_crop, ink_crop),
+                    h_frac=h_frac,
+                    w_frac=w_frac,
+                    ascent_frac=ascent_frac,
+                    descent_frac=descent_frac,
+                )
+
+        # Global x-height: median of the letter/digit rows' units. Used to
+        # normalize punctuation to the same scale the writing uses. If there were
+        # no letter rows at all (punctuation-only sheet), fall back to each punct
+        # row's own median so we still produce sensibly-scaled marks.
+        global_xheight = float(np.median(ref_heights)) if ref_heights else 0.0
+
+        # --- Pass 2: punctuation rows (global x-height + class placement) ---
+        for (r0, r1), expected_chars in punct_rows:
+            chars = [c for c in expected_chars if c != " "]
+            boxes = _row_char_boxes(ink, r0, r1, expected=len(chars))
+            if not boxes:
+                continue
+
+            unit = global_xheight
+            if unit <= 0:
+                heights = [br1 - br0 for (_, br0, _, br1) in boxes]
+                unit = float(np.median(heights)) if heights else 1.0
+                if unit <= 0:
+                    unit = 1.0
+
+            for ch, (c0, br0, c1, br1) in zip(chars, boxes):
+                gray_crop = gray[br0:br1, c0:c1]
+                ink_crop = ink[br0:br1, c0:c1]
+                if gray_crop.size == 0:
+                    continue
+
+                # Keep the mark's REAL ink height and width (its own shape/size),
+                # normalized to the global x-height so it sits proportionally next
+                # to the writing. Vertical anchoring comes from the class table
+                # rather than a fitted baseline, which punctuation can't provide.
+                h_frac = (br1 - br0) / unit
+                w_frac = (c1 - c0) / unit
+                descent_frac = PUNCT_DESCENT.get(ch, 0.0)
+                ascent_frac = h_frac - descent_frac
+
+                glyphs[ch] = Glyph(
+                    char=ch,
+                    image=_to_rgba_glyph(gray_crop, ink_crop),
+                    h_frac=h_frac,
+                    w_frac=w_frac,
+                    ascent_frac=ascent_frac,
+                    descent_frac=descent_frac,
+                )
 
         return cls(glyphs)
 
