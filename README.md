@@ -1,72 +1,67 @@
-# Handscrybe
+<div align="center">
 
-**Turn typed documents into handwriting — without losing the layout.**
+# ✍️ Handscrybe
 
-Handscrybe takes a PDF, DOCX, or TXT file and rewrites the text in handwriting,
-keeping the page exactly as it was: same pages, same positions, same tables and
-borders, same colors. Only the typed text is swapped for handwriting. Bring your
-own handwriting (a photo of a sample sheet) and it uses *your* letters; skip that
-and it falls back to a clean built-in handwriting font.
+### Turn any typed document into handwriting — without losing the layout.
 
-Deliver the result as a **PDF**, a **DOCX**, or as plain **TXT** / **Markdown**
-text content.
+*Your PDF, DOCX, or TXT comes back handwritten, on the same pages, in the same places — tables, borders, colors and all.*
 
----
-
-## Why Handscrybe
-
-Most "text to handwriting" tools throw your document on a blank ruled page and
-call it done — headings, tables, columns, and spacing all gone. Handscrybe is built
-the other way around: the original document *is* the canvas. It renders your
-source to real page coordinates, measures where every line of text sits, and
-draws handwriting into that same space. The page you get back looks like the one
-you started with — just handwritten.
-
-What it preserves:
-
-- **Pagination** — one source page in, one page out. No drift.
-- **Layout** — text stays where it was; nothing reflows unless you ask.
-- **Vector graphics** — table borders, rules, and boxes come through intact.
-- **Color** — keeps each span's original ink, or force a single pen color.
-- **Styling** — bold and italic are honored (real faces if provided, otherwise
-  synthesized).
-
-## How it works
-
-1. **Normalize** — DOCX inputs are rendered to PDF with LibreOffice so Handscrybe
-   gets exact page geometry; PDF and TXT go straight in.
-2. **Parse** — text spans (with position, size, style, and color) and vector
-   drawings are extracted from every page.
-3. **Fit** — each line is measured in the handwriting font and fitted into the
-   space the original text occupied (in `fit` mode, line count never changes;
-   `reflow` re-wraps within a block).
-4. **Render** — handwriting is drawn onto a copy of the source page. If you
-   supplied a handwriting sample, your own glyphs are composited in; anything
-   missing (punctuation, accents) falls back to the font.
-5. **Deliver** — the handwriting PDF is produced first, then converted to the
-   format you asked for.
-
-A note on formats, stated plainly: handwriting is *visual*, so **PDF and DOCX
-carry the actual handwriting**. **TXT and Markdown are text-only formats**, so
-they deliver the document's text content instead of the handwriting.
-
----
-
-## Install
+[![npm version](https://img.shields.io/npm/v/handscrybe.svg?color=cyan&label=npm)](https://www.npmjs.com/package/handscrybe)
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%E2%89%A516-brightgreen.svg)](https://nodejs.org)
+[![python](https://img.shields.io/badge/python-%E2%89%A53.12-blue.svg)](https://www.python.org)
 
 ```bash
 npm install -g handscrybe
+handscrybe
 ```
 
-That's it. The first time you run `handscrybe`, it sets itself up automatically:
+</div>
 
-- **Python** — Handscrybe's engine is Python. It reuses a Python 3.12+ you already
-  have, or quietly downloads a private, self-contained copy into `~/.handscrybe`
-  (no admin rights, nothing added to your PATH). This one-time step takes about
-  a minute; every run after that is instant.
-- **LibreOffice** — *optional*, and only needed to read **DOCX input**. Handscrybe
-  detects it and, if it's missing, tells you exactly how to add it. PDF and TXT
-  input — and every output format — work without it.
+---
+
+```
+        Typed input                        Handwritten output
+   ┌────────────────────┐             ┌────────────────────┐
+   │  Quarterly Report  │             │  Quarterly Report  │  ← same text, handwritten
+   │  ┌──────┬───────┐   │   ──────▶   │  ┌──────┬───────┐   │
+   │  │ Item │ Total │   │             │  │ Item │ Total │   │  ← tables & borders kept
+   │  └──────┴───────┘   │             │  └──────┴───────┘   │
+   └────────────────────┘             └────────────────────┘
+          page 1                             page 1
+       (typed font)                    (same spot, same size)
+```
+
+---
+
+## ✨ Why Handscrybe
+
+Most "text to handwriting" tools dump your words onto a blank ruled page — headings, tables, columns and spacing all gone. **Handscrybe works the other way around: your original document *is* the canvas.** It reads your source to real page coordinates, measures where every line sits, and draws handwriting into that exact space.
+
+The page you get back looks like the one you started with. Just handwritten.
+
+|  | What you get |
+| :---: | :--- |
+| 📄 | **Pixel-faithful layout** — text stays exactly where it was; nothing reflows unless you ask |
+| 📐 | **Same pagination** — one page in, one page out, no drift |
+| 🧩 | **Graphics survive** — table borders, rules, boxes and shapes come through untouched |
+| 🎨 | **Real colors** — keeps each line's original ink, or force one pen color |
+| ✒️ | **Your handwriting** — snap a photo of a sample sheet and it writes in *your* letters |
+| 🔤 | **Bold & italic** — honored automatically |
+
+---
+
+## 🚀 Quick start
+
+```bash
+npm install -g handscrybe   # one command, no Python setup needed
+handscrybe                  # launches a friendly interactive menu
+```
+
+The **first** run sets everything up for you:
+
+- **🐍 Python** — Handscrybe's engine. It reuses a Python 3.12+ you already have, or quietly downloads a private, self-contained copy into `~/.handscrybe` (no admin rights, nothing touches your PATH). ~1 minute, once. Every run after is instant.
+- **📝 LibreOffice** — *optional*, only needed to read **DOCX input**. Handscrybe detects it and tells you exactly how to add it if it's missing. PDF/TXT input and every output format work without it.
 
   | Platform | Install LibreOffice |
   | --- | --- |
@@ -74,58 +69,52 @@ That's it. The first time you run `handscrybe`, it sets itself up automatically:
   | macOS | `brew install --cask libreoffice` |
   | Linux | `sudo apt install libreoffice` |
 
-> **From source (for development):** clone the repo, then
-> `pip install -e .` in a Python 3.12 virtual environment. See
-> [Development](#development).
+> 💡 **Developing from source?** Clone the repo and `pip install -e .` in a Python 3.12 venv — see [Development](#-development).
 
 ---
 
-## Usage
+## 🎯 Usage
 
-### Just run `handscrybe`
+### The easy way — just run `handscrybe`
 
-The friendliest way — an interactive menu that walks you through everything:
-
-```bash
-handscrybe
-```
-
-You'll get a short menu:
+An interactive menu walks you through everything:
 
 ```
-What would you like to do?
-  1) Convert a document   (guided, step by step)
-  2) Open the web app     (drag and drop in your browser)
-  3) Quit
+   ┌─────────────────────────────────────────┐
+   │   What would you like to do?             │
+   │                                          │
+   │     1) Convert a document                │
+   │     2) Open the web app                  │
+   │     3) Quit                              │
+   └─────────────────────────────────────────┘
 ```
 
-Pick **1** and Handscrybe asks a few plain questions (which file, your handwriting or
-the built-in font, ink color, layout, output format, where to save) and does the
-rest. Pick **2** and it launches the web app and opens it in your browser.
+Pick **1** and it asks a few plain questions — which file, your handwriting or the built-in font, ink color, layout, output format, where to save — then does the rest. Pick **2** and it opens the drag-and-drop web app in your browser.
 
-### Command line (scripting)
-
-For automation, the underlying command takes flags directly:
+### The command line — for scripts & automation
 
 ```bash
 # Simplest: PDF in, handwriting PDF out
 handscrybe input.pdf output.pdf
 
-# DOCX in, handwriting PDF out
+# DOCX in → handwriting PDF out
 handscrybe report.docx report_hand.pdf
 
-# Use your own handwriting from a sample sheet
+# Write it in YOUR handwriting
 handscrybe input.pdf output.pdf --handwriting-image my_hand.png
 
-# Choose the delivered format (or let the extension decide)
+# Choose the delivered format (or just let the extension decide)
 handscrybe input.pdf notes.docx --to docx
-handscrybe input.pdf notes.txt          # inferred from ".txt"
+handscrybe input.pdf notes.txt            # inferred from ".txt"
 
-# Force a single pen color and reflow the text
+# Force a single pen color and let text reflow
 handscrybe input.pdf output.pdf --ink "#1a1a6e" --mode reflow
 ```
 
-Key options:
+<details>
+<summary><b>All command-line options</b></summary>
+
+<br>
 
 | Option | What it does |
 | --- | --- |
@@ -139,21 +128,21 @@ Key options:
 | `--size-scale N` | Multiply every font size (e.g. `1.1` for slightly larger writing). |
 | `--soffice PATH` | Point at the LibreOffice binary if it isn't auto-detected. |
 
-### Web UI
+</details>
+
+### The web app
 
 ```bash
-handscrybe-web
-# prints the URL and opens your browser; picks a free port if 5000 is busy
+handscrybe-web    # prints the URL, opens your browser, picks a free port if 5000 is busy
 ```
 
-Upload a document, optionally add a handwriting sample, pick your ink, layout,
-and delivery format, and download the result. Host and port are overridable:
+Drag in a document, optionally add a handwriting sample, pick ink / layout / format, and download. Host and port are overridable:
 
 ```bash
 HANDSCRYBE_HOST=0.0.0.0 HANDSCRYBE_PORT=8080 handscrybe-web
 ```
 
-### As a library
+### As a Python library
 
 ```python
 from handscrybe.config import Config, OutputFormat
@@ -169,10 +158,9 @@ convert("input.pdf", "output.pdf", cfg)
 
 ---
 
-## The handwriting sample sheet
+## ✒️ Use your own handwriting
 
-To write in your own hand, give Handscrybe a photo or scan of a sheet with three
-rows of characters:
+Give Handscrybe a photo or scan of a sheet with three rows of characters:
 
 ```
 A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
@@ -180,46 +168,66 @@ a b c d e f g h i j k l m n o p q r s t u v w x y z
 0 1 2 3 4 5 6 7 8 9
 ```
 
-Handscrybe segments the sheet into individual glyphs and composites them into the
-document. Characters you didn't write (punctuation, accented letters) fall back
-to the built-in font automatically, so partial sheets still work. In the web UI
-you'll see how many of the 62 expected glyphs were found.
+It segments the sheet into individual glyphs and composites them into your document. Any character you didn't write (punctuation, accented letters) falls back to the built-in font automatically — so even a **partial** sheet works. The web app shows you how many of the 62 glyphs it found.
 
 ---
 
-## Supported formats
+## 📦 What goes in, what comes out
 
 | | PDF | DOCX | TXT |
 | --- | :---: | :---: | :---: |
-| **Input** | ✓ | ✓ (needs LibreOffice) | ✓ |
-| **Output** | ✓ | ✓ | ✓ (+ Markdown) |
+| **Input** | ✅ | ✅ *(needs LibreOffice)* | ✅ |
+| **Output** | ✅ | ✅ | ✅ *(+ Markdown)* |
+
+> **Heads-up on text formats:** handwriting is *visual*, so **PDF and DOCX carry the actual handwriting**. **TXT and Markdown are text-only** — they deliver the document's text *content*, not the handwriting.
 
 ---
 
-## Development
+## 🔧 How it works
 
-Clone the repo, then work against the Python package directly:
+```
+  ┌──────────┐   ┌────────┐   ┌───────┐   ┌────────┐   ┌─────────┐
+  │Normalize │──▶│ Parse  │──▶│  Fit  │──▶│ Render │──▶│ Deliver │
+  └──────────┘   └────────┘   └───────┘   └────────┘   └─────────┘
+   DOCX→PDF via   text spans   size each   draw hand-   PDF, DOCX,
+   LibreOffice;   + graphics   line into   writing on   TXT or MD
+   PDF/TXT as-is  per page     its slot    the page
+```
+
+1. **Normalize** — DOCX is rendered to PDF (LibreOffice) so Handscrybe has exact geometry; PDF and TXT go straight in.
+2. **Parse** — every text span (position, size, style, color) and vector drawing is extracted per page.
+3. **Fit** — each line is measured in the handwriting font and fitted into the space the original occupied (`fit` never changes line count; `reflow` re-wraps within a block).
+4. **Render** — handwriting is drawn onto a copy of the source page; your own glyphs are composited in where available, else the built-in font.
+5. **Deliver** — the handwriting PDF is produced first, then converted to the format you asked for.
+
+---
+
+## 🛠️ Development
 
 ```bash
+git clone https://github.com/Sami001-OG/scrybe.git
+cd scrybe
 python -m venv .venv
 # Windows: .venv\Scripts\activate   |   macOS/Linux: source .venv/bin/activate
 pip install -e .
-python -m pytest -q          # Python engine + CLI/web/wizard tests
-node npm/test/smoke.js        # npm launcher smoke checks (no provisioning needed)
+
+python -m pytest -q       # Python engine + CLI / web / wizard tests
+node npm/test/smoke.js     # npm launcher smoke checks (no provisioning needed)
 ```
 
-Project layout:
+**Project layout**
 
-- `src/handscrybe/` — the Python engine (parsing, layout, rendering, glyphs,
-  CLI, wizard, web app) and the bundled handwriting font under `fonts/`.
-- `npm/` — the dependency-free Node launcher that provisions Python and hands
-  off to the engine. `bin/handscrybe.js` is the `handscrybe` command.
+- `src/handscrybe/` — the Python engine: parsing, layout, rendering, glyph extraction, CLI, wizard, web app (bundled handwriting font under `fonts/`).
+- `npm/` — the dependency-free Node launcher that provisions Python and hands off to the engine. `bin/handscrybe.js` is the `handscrybe` command.
 
-Tests that require LibreOffice (DOCX input) skip automatically when it isn't
-installed, so the suite is green on any machine.
+Tests that need LibreOffice (DOCX input) skip automatically when it isn't installed, so the suite stays green on any machine.
 
 ---
 
-## License
+## 📄 License
 
-Released under the [MIT License](LICENSE).
+[MIT](LICENSE) — free to use, modify, and distribute.
+
+<div align="center">
+<sub>Built for anyone who needs the look of handwriting with the precision of a document.</sub>
+</div>
