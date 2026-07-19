@@ -25,7 +25,7 @@ import sys
 
 import pytest
 
-# Make `import doc_to_hand` work without an editable install (mirrors
+# Make `import handscrybe` work without an editable install (mirrors
 # test_layout.py's bootstrap): the package lives under ../src.
 _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if _SRC not in sys.path:
@@ -33,8 +33,8 @@ if _SRC not in sys.path:
 
 import fitz  # noqa: E402
 
-from doc_to_hand.config import Config  # noqa: E402
-from doc_to_hand.pipeline import convert  # noqa: E402
+from handscrybe.config import Config  # noqa: E402
+from handscrybe.pipeline import convert  # noqa: E402
 
 # The sample text we lay down and later assert has been erased.
 _LINE_REGULAR = "The quick brown fox"

@@ -1,8 +1,8 @@
-# Scrybe
+# Handscrybe
 
 **Turn typed documents into handwriting — without losing the layout.**
 
-Scrybe takes a PDF, DOCX, or TXT file and rewrites the text in handwriting,
+Handscrybe takes a PDF, DOCX, or TXT file and rewrites the text in handwriting,
 keeping the page exactly as it was: same pages, same positions, same tables and
 borders, same colors. Only the typed text is swapped for handwriting. Bring your
 own handwriting (a photo of a sample sheet) and it uses *your* letters; skip that
@@ -13,10 +13,10 @@ text content.
 
 ---
 
-## Why Scrybe
+## Why Handscrybe
 
 Most "text to handwriting" tools throw your document on a blank ruled page and
-call it done — headings, tables, columns, and spacing all gone. Scrybe is built
+call it done — headings, tables, columns, and spacing all gone. Handscrybe is built
 the other way around: the original document *is* the canvas. It renders your
 source to real page coordinates, measures where every line of text sits, and
 draws handwriting into that same space. The page you get back looks like the one
@@ -33,7 +33,7 @@ What it preserves:
 
 ## How it works
 
-1. **Normalize** — DOCX inputs are rendered to PDF with LibreOffice so Scrybe
+1. **Normalize** — DOCX inputs are rendered to PDF with LibreOffice so Handscrybe
    gets exact page geometry; PDF and TXT go straight in.
 2. **Parse** — text spans (with position, size, style, and color) and vector
    drawings are extracted from every page.
@@ -60,11 +60,11 @@ npm install -g handscrybe
 
 That's it. The first time you run `handscrybe`, it sets itself up automatically:
 
-- **Python** — Scrybe's engine is Python. It reuses a Python 3.12+ you already
-  have, or quietly downloads a private, self-contained copy into `~/.scrybe`
+- **Python** — Handscrybe's engine is Python. It reuses a Python 3.12+ you already
+  have, or quietly downloads a private, self-contained copy into `~/.handscrybe`
   (no admin rights, nothing added to your PATH). This one-time step takes about
   a minute; every run after that is instant.
-- **LibreOffice** — *optional*, and only needed to read **DOCX input**. Scrybe
+- **LibreOffice** — *optional*, and only needed to read **DOCX input**. Handscrybe
   detects it and, if it's missing, tells you exactly how to add it. PDF and TXT
   input — and every output format — work without it.
 
@@ -99,7 +99,7 @@ What would you like to do?
   3) Quit
 ```
 
-Pick **1** and Scrybe asks a few plain questions (which file, your handwriting or
+Pick **1** and Handscrybe asks a few plain questions (which file, your handwriting or
 the built-in font, ink color, layout, output format, where to save) and does the
 rest. Pick **2** and it launches the web app and opens it in your browser.
 
@@ -109,20 +109,20 @@ For automation, the underlying command takes flags directly:
 
 ```bash
 # Simplest: PDF in, handwriting PDF out
-doc-to-hand input.pdf output.pdf
+handscrybe input.pdf output.pdf
 
 # DOCX in, handwriting PDF out
-doc-to-hand report.docx report_hand.pdf
+handscrybe report.docx report_hand.pdf
 
 # Use your own handwriting from a sample sheet
-doc-to-hand input.pdf output.pdf --handwriting-image my_hand.png
+handscrybe input.pdf output.pdf --handwriting-image my_hand.png
 
 # Choose the delivered format (or let the extension decide)
-doc-to-hand input.pdf notes.docx --to docx
-doc-to-hand input.pdf notes.txt          # inferred from ".txt"
+handscrybe input.pdf notes.docx --to docx
+handscrybe input.pdf notes.txt          # inferred from ".txt"
 
 # Force a single pen color and reflow the text
-doc-to-hand input.pdf output.pdf --ink "#1a1a6e" --mode reflow
+handscrybe input.pdf output.pdf --ink "#1a1a6e" --mode reflow
 ```
 
 Key options:
@@ -142,7 +142,7 @@ Key options:
 ### Web UI
 
 ```bash
-doc-to-hand-web
+handscrybe-web
 # prints the URL and opens your browser; picks a free port if 5000 is busy
 ```
 
@@ -150,14 +150,14 @@ Upload a document, optionally add a handwriting sample, pick your ink, layout,
 and delivery format, and download the result. Host and port are overridable:
 
 ```bash
-DOC_TO_HAND_HOST=0.0.0.0 DOC_TO_HAND_PORT=8080 doc-to-hand-web
+HANDSCRYBE_HOST=0.0.0.0 HANDSCRYBE_PORT=8080 handscrybe-web
 ```
 
 ### As a library
 
 ```python
-from doc_to_hand.config import Config, OutputFormat
-from doc_to_hand.pipeline import convert
+from handscrybe.config import Config, OutputFormat
+from handscrybe.pipeline import convert
 
 cfg = Config(
     handwriting_image="my_hand.png",   # optional — omit for the built-in font
@@ -171,7 +171,7 @@ convert("input.pdf", "output.pdf", cfg)
 
 ## The handwriting sample sheet
 
-To write in your own hand, give Scrybe a photo or scan of a sheet with three
+To write in your own hand, give Handscrybe a photo or scan of a sheet with three
 rows of characters:
 
 ```
@@ -180,7 +180,7 @@ a b c d e f g h i j k l m n o p q r s t u v w x y z
 0 1 2 3 4 5 6 7 8 9
 ```
 
-Scrybe segments the sheet into individual glyphs and composites them into the
+Handscrybe segments the sheet into individual glyphs and composites them into the
 document. Characters you didn't write (punctuation, accented letters) fall back
 to the built-in font automatically, so partial sheets still work. In the web UI
 you'll see how many of the 62 expected glyphs were found.
@@ -210,10 +210,10 @@ node npm/test/smoke.js        # npm launcher smoke checks (no provisioning neede
 
 Project layout:
 
-- `src/doc_to_hand/` — the Python engine (parsing, layout, rendering, glyphs,
+- `src/handscrybe/` — the Python engine (parsing, layout, rendering, glyphs,
   CLI, wizard, web app) and the bundled handwriting font under `fonts/`.
 - `npm/` — the dependency-free Node launcher that provisions Python and hands
-  off to the engine. `bin/scrybe.js` is the `handscrybe` command.
+  off to the engine. `bin/handscrybe.js` is the `handscrybe` command.
 
 Tests that require LibreOffice (DOCX input) skip automatically when it isn't
 installed, so the suite is green on any machine.

@@ -28,7 +28,7 @@ import fitz  # noqa: E402
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from doc_to_hand.glyphs import (  # noqa: E402
+from handscrybe.glyphs import (  # noqa: E402
     DIGITS,
     LOWER,
     UPPER,

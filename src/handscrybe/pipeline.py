@@ -85,7 +85,7 @@ def convert(
     # DOCX conversion needs a scratch directory for the intermediate PDF (and
     # LibreOffice's throwaway user profile). A PDF input skips this entirely,
     # but we still create the dir cheaply and let it clean up on exit.
-    with tempfile.TemporaryDirectory(prefix="doc_to_hand_") as work_dir:
+    with tempfile.TemporaryDirectory(prefix="handscrybe_") as work_dir:
         pdf_path, source_format = normalize(
             input_path, work_dir, soffice_cmd=config.soffice_cmd
         )

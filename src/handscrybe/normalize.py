@@ -64,7 +64,7 @@ def find_soffice(explicit: str | None = None) -> str | None:
     # The npm launcher detects LibreOffice and passes its path via this env var,
     # so a soffice found by the Node side is honored by every Python entry point
     # (CLI, wizard, webapp) without threading it through each call site.
-    env_soffice = os.environ.get("SCRYBE_SOFFICE")
+    env_soffice = os.environ.get("HANDSCRYBE_SOFFICE")
     if env_soffice:
         if os.path.isfile(env_soffice):
             return env_soffice

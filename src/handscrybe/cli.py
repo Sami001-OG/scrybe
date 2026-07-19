@@ -1,11 +1,11 @@
-"""Command-line entry point for doc-to-hand.
+"""Command-line entry point for handscrybe.
 
 Usage:
-    python -m doc_to_hand.cli <input.pdf|input.docx> <output.pdf> [options]
+    python -m handscrybe.cli <input.pdf|input.docx> <output.pdf> [options]
 
 The CLI is a thin wrapper over ``pipeline.convert``: it parses arguments into a
 ``Config`` and calls convert. Keeping all real work in the library modules means
-the tool is equally usable as ``from doc_to_hand.pipeline import convert``.
+the tool is equally usable as ``from handscrybe.pipeline import convert``.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from .pipeline import convert
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="doc-to-hand",
+        prog="handscrybe",
         description=(
             "Convert a DOCX or PDF into a handwriting PDF that preserves the "
             "original layout page-for-page, replacing only the typed text."

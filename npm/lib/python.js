@@ -3,18 +3,18 @@
 //
 // WHY THIS EXISTS
 // ---------------
-// Scrybe's engine is Python (PyMuPDF, numpy, Flask — no JS equivalents). The
+// Handscrybe's engine is Python (PyMuPDF, numpy, Flask — no JS equivalents). The
 // npm package is a launcher; the real work runs in Python. So the very first
-// thing `scrybe` must do is guarantee a Python 3.12+ interpreter exists.
+// thing `handscrybe` must do is guarantee a Python 3.12+ interpreter exists.
 //
 // STRATEGY (cheapest first)
 //   1. Reuse a system Python 3.12+ if one is already installed. No download,
 //      instant. This is the common case for developers.
 //   2. Otherwise download a *relocatable* standalone CPython (the same
-//      python-build-standalone builds uv/pyenv use) into ~/.scrybe/. No admin
+//      python-build-standalone builds uv/pyenv use) into ~/.handscrybe/. No admin
 //      rights, no PATH changes, fully self-contained.
 //
-// Everything is cached under ~/.scrybe so provisioning happens once.
+// Everything is cached under ~/.handscrybe so provisioning happens once.
 
 const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
@@ -25,9 +25,9 @@ const ui = require('./ui');
 
 const MIN_MINOR = 12; // require CPython 3.12+
 
-// --- Scrybe home ---------------------------------------------------------
-function scrybeHome() {
-  const home = process.env.SCRYBE_HOME || path.join(os.homedir(), '.scrybe');
+// --- Handscrybe home ---------------------------------------------------------
+function handscrybeHome() {
+  const home = process.env.HANDSCRYBE_HOME || path.join(os.homedir(), '.handscrybe');
   fs.mkdirSync(home, { recursive: true });
   return home;
 }
@@ -78,7 +78,7 @@ function probe(cmd, baseArgs) {
 
 // Path to a previously-provisioned standalone interpreter, if present.
 function managedPython() {
-  const home = scrybeHome();
+  const home = handscrybeHome();
   const base = path.join(home, 'python');
   const exe =
     process.platform === 'win32'
@@ -117,7 +117,7 @@ function download(url, dest) {
     const get = (u, redirects) => {
       if (redirects > 10) return reject(new Error('Too many redirects'));
       https
-        .get(u, { headers: { 'User-Agent': 'scrybe-installer' } }, (res) => {
+        .get(u, { headers: { 'User-Agent': 'handscrybe-installer' } }, (res) => {
           if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
             res.resume();
             return get(res.headers.location, redirects + 1);
@@ -165,10 +165,10 @@ async function downloadStandalone() {
   if (!asset) {
     throw new Error(
       `No prebuilt Python is available for ${process.platform}/${process.arch}. ` +
-        'Please install Python 3.12+ manually and re-run scrybe.'
+        'Please install Python 3.12+ manually and re-run handscrybe.'
     );
   }
-  const home = scrybeHome();
+  const home = handscrybeHome();
   const base = path.join(home, 'python');
   fs.mkdirSync(base, { recursive: true });
   const archive = path.join(base, asset.name);
@@ -210,4 +210,4 @@ async function ensurePython() {
   return { cmd: exe, args: [] };
 }
 
-module.exports = { ensurePython, scrybeHome, probe, systemCandidates };
+module.exports = { ensurePython, handscrybeHome, probe, systemCandidates };

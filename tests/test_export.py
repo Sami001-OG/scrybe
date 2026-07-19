@@ -27,8 +27,8 @@ if _SRC not in sys.path:
 
 import fitz  # noqa: E402
 
-from doc_to_hand.config import Config, OutputFormat  # noqa: E402
-from doc_to_hand.pipeline import convert  # noqa: E402
+from handscrybe.config import Config, OutputFormat  # noqa: E402
+from handscrybe.pipeline import convert  # noqa: E402
 
 _TEXT = "Output format test 123"
 

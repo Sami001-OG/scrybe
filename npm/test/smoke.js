@@ -36,7 +36,7 @@ check('ui module exposes helpers', () => {
 });
 
 check('python module exposes API', () => {
-  ['ensurePython', 'scrybeHome', 'probe', 'systemCandidates'].forEach((k) => {
+  ['ensurePython', 'handscrybeHome', 'probe', 'systemCandidates'].forEach((k) => {
     assert.strictEqual(typeof python[k], 'function', 'missing python.' + k);
   });
 });
@@ -66,15 +66,15 @@ check('payloadVersion matches package.json', () => {
 
 check('bundled font ships inside the Python package', () => {
   const fs = require('fs');
-  const ttf = path.join(env.payloadDir(), 'src', 'doc_to_hand', 'fonts', 'Caveat-Regular.ttf');
+  const ttf = path.join(env.payloadDir(), 'src', 'handscrybe', 'fonts', 'Caveat-Regular.ttf');
   assert.ok(fs.existsSync(ttf), 'bundled font missing: ' + ttf);
 });
 
-check('bin/scrybe.js parses and references the launcher module', () => {
+check('bin/handscrybe.js parses and references the launcher module', () => {
   const fs = require('fs');
-  const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'scrybe.js'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'handscrybe.js'), 'utf8');
   // It must hand off to the Python launcher (single stdin owner).
-  assert.ok(src.includes('doc_to_hand.launcher'), 'launcher not referenced');
+  assert.ok(src.includes('handscrybe.launcher'), 'launcher not referenced');
 });
 
 // A system Python probe is best-effort: on CI without Python this is allowed to

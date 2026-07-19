@@ -23,9 +23,9 @@ if _SRC not in sys.path:
 
 import fitz  # noqa: E402
 
-from doc_to_hand.config import Config  # noqa: E402
-from doc_to_hand.normalize import find_soffice  # noqa: E402
-from doc_to_hand.pipeline import convert  # noqa: E402
+from handscrybe.config import Config  # noqa: E402
+from handscrybe.normalize import find_soffice  # noqa: E402
+from handscrybe.pipeline import convert  # noqa: E402
 
 # Skip the whole module if LibreOffice isn't available.
 pytestmark = pytest.mark.skipif(

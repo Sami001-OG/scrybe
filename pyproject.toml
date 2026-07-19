@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "scrybe"
-version = "0.1.0"
-description = "Scrybe turns typed documents (PDF/DOCX/TXT) into handwriting while preserving the original page layout."
+name = "handscrybe"
+version = "0.2.0"
+description = "Handscrybe turns typed documents (PDF/DOCX/TXT) into handwriting while preserving the original page layout."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
@@ -20,8 +20,8 @@ dependencies = [
 ]
 
 [project.scripts]
-doc-to-hand = "doc_to_hand.cli:main"
-doc-to-hand-web = "doc_to_hand.webapp:main"
+handscrybe = "handscrybe.cli:main"
+handscrybe-web = "handscrybe.webapp:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -30,7 +30,7 @@ where = ["src"]
 # The bundled handwriting font lives inside the package so it resolves after a
 # normal (non-editable) install, e.g. the npm-provisioned venv. Without this the
 # .ttf would be dropped from the wheel and every conversion would fail.
-doc_to_hand = ["fonts/*.ttf", "fonts/*.txt"]
+handscrybe = ["fonts/*.ttf", "fonts/*.txt"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

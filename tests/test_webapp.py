@@ -25,7 +25,7 @@ import fitz  # noqa: E402
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from doc_to_hand.webapp import create_app  # noqa: E402
+from handscrybe.webapp import create_app  # noqa: E402
 
 _ROWS = ["ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz", "0123456789"]
 
@@ -61,7 +61,7 @@ def _txt_doc() -> bytes:
 def test_index_loads(client):
     r = client.get("/")
     assert r.status_code == 200
-    assert b"doc-to-hand" in r.data
+    assert b"handscrybe" in r.data
 
 
 def test_convert_txt_ttf_only(client):

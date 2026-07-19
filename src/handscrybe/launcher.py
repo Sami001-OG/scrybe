@@ -1,6 +1,6 @@
-"""Interactive Scrybe menu — the mode selector shown after `scrybe` starts.
+"""Interactive Handscrybe menu — the mode selector shown after `handscrybe` starts.
 
-The npm ``scrybe`` command provisions Python and a venv, then hands off to THIS
+The npm ``handscrybe`` command provisions Python and a venv, then hands off to THIS
 module. Keeping the menu (and every prompt) in a single Python process avoids a
 subtle but fatal bug: if Node reads stdin to show the menu and then spawns
 Python for the wizard, Node's line-buffered reader swallows the wizard's
@@ -11,7 +11,7 @@ Responsibilities:
   * Report whether LibreOffice was detected (DOCX *input* depends on it) and, if
     not, print the platform-specific install hint — without blocking anything
     else.
-  * Dispatch to :func:`doc_to_hand.wizard.run_wizard` or the Flask web server.
+  * Dispatch to :func:`handscrybe.wizard.run_wizard` or the Flask web server.
 
 Like the wizard, all I/O is injectable so the whole loop is testable with
 scripted answers and fakes.
@@ -44,7 +44,7 @@ def _hint_for(platform: str) -> str:
 
 def _banner(output_fn: OutputFn) -> None:
     output_fn("=" * 60)
-    output_fn("  Scrybe — turn typed documents into handwriting")
+    output_fn("  Handscrybe — turn typed documents into handwriting")
     output_fn("=" * 60)
 
 

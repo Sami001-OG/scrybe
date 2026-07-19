@@ -1,8 +1,8 @@
 'use strict';
-// Provision a Python virtual environment with Scrybe and its dependencies.
+// Provision a Python virtual environment with Handscrybe and its dependencies.
 //
 // Given a working Python interpreter (from python.js), this creates a venv under
-// ~/.scrybe/venv, installs the bundled Scrybe payload into it (which pulls the
+// ~/.handscrybe/venv, installs the bundled Handscrybe payload into it (which pulls the
 // pinned deps: PyMuPDF, numpy, Flask, ...), and records a version marker so the
 // whole step is skipped on later runs. The venv's own python is then used to run
 // the CLI, wizard, and web server — fully isolated from any system packages.
@@ -12,7 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const ui = require('./ui');
-const { scrybeHome } = require('./python');
+const { handscrybeHome } = require('./python');
 
 // The bundled Python payload is the npm package root itself: it ships
 // pyproject.toml, src/, and fonts/ (see package.json "files"), which is exactly
@@ -22,7 +22,7 @@ function payloadDir() {
   return path.join(__dirname, '..', '..');
 }
 
-// The installed package version, used as the venv marker so a Scrybe upgrade
+// The installed package version, used as the venv marker so a Handscrybe upgrade
 // (new npm version) triggers a reinstall automatically.
 function payloadVersion() {
   try {
@@ -34,7 +34,7 @@ function payloadVersion() {
 }
 
 function venvDir() {
-  return path.join(scrybeHome(), 'venv');
+  return path.join(handscrybeHome(), 'venv');
 }
 
 // Path to the venv's python executable (platform-specific layout).
@@ -46,7 +46,7 @@ function venvPython() {
 }
 
 function markerPath() {
-  return path.join(venvDir(), '.scrybe-installed');
+  return path.join(venvDir(), '.handscrybe-installed');
 }
 
 // Is a venv already provisioned for the current payload version?
@@ -71,7 +71,7 @@ function run(cmd, args) {
   return { ok: r.status === 0, out, status: r.status };
 }
 
-// Create the venv and install Scrybe into it. `py` is {cmd, args} from python.js.
+// Create the venv and install Handscrybe into it. `py` is {cmd, args} from python.js.
 async function ensureVenv(py) {
   if (venvReady()) return venvPython();
 
@@ -82,7 +82,7 @@ async function ensureVenv(py) {
     fs.rmSync(vdir, { recursive: true, force: true });
   }
 
-  ui.step('Setting up Scrybe (first run only). This can take a minute…');
+  ui.step('Setting up Handscrybe (first run only). This can take a minute…');
 
   // 1. Create the venv using the resolved interpreter.
   const create = run(py.cmd, py.args.concat(['-m', 'venv', vdir]));
@@ -101,7 +101,7 @@ async function ensureVenv(py) {
   }
 
   // 3. Install the bundled payload (pulls all pinned deps from pyproject.toml).
-  ui.step('Installing Scrybe and its dependencies…');
+  ui.step('Installing Handscrybe and its dependencies…');
   const install = run(vpy, ['-m', 'pip', 'install', payloadDir(), '--quiet']);
   if (!install.ok) {
     throw new Error('Dependency installation failed:\n' + tail(install.out));
@@ -110,15 +110,15 @@ async function ensureVenv(py) {
   // 4. Sanity check: the package imports and fonts resolve.
   const check = run(vpy, [
     '-c',
-    'import doc_to_hand.pipeline, doc_to_hand.webapp, doc_to_hand.wizard; print("ok")',
+    'import handscrybe.pipeline, handscrybe.webapp, handscrybe.wizard; print("ok")',
   ]);
   if (!check.ok || !check.out.includes('ok')) {
-    throw new Error('Scrybe was installed but failed to import:\n' + tail(check.out));
+    throw new Error('Handscrybe was installed but failed to import:\n' + tail(check.out));
   }
 
   fs.mkdirSync(vdir, { recursive: true });
   fs.writeFileSync(markerPath(), payloadVersion());
-  ui.ok('Scrybe is ready.');
+  ui.ok('Handscrybe is ready.');
   return vpy;
 }
 

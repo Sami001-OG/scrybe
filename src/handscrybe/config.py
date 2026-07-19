@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 
-# The bundled handwriting fonts live INSIDE the package (doc_to_hand/fonts/),
+# The bundled handwriting fonts live INSIDE the package (handscrybe/fonts/),
 # not at the repo root. Resolving relative to this file means the path is
 # correct both in a source checkout and after `pip install` relocates the
 # package into site-packages — the previous "../../fonts" scheme broke the

@@ -1,9 +1,9 @@
-"""Interactive command-line wizard for Scrybe.
+"""Interactive command-line wizard for Handscrybe.
 
 Instead of remembering CLI flags, a user can run this wizard and answer a short
 series of questions: which document to convert, whether to use their own
 handwriting, ink color, layout mode, output format, and where to write the
-result. The wizard builds a :class:`~doc_to_hand.config.Config` and hands it to
+result. The wizard builds a :class:`~handscrybe.config.Config` and hands it to
 ``pipeline.convert``.
 
 DESIGN: EVERY SIDE EFFECT IS INJECTABLE
@@ -349,7 +349,7 @@ def run_wizard(
 
     try:
         output_fn("=" * 60)
-        output_fn("  Scrybe - turn your document into handwriting")
+        output_fn("  Handscrybe - turn your document into handwriting")
         output_fn("=" * 60)
         output_fn("Answer a few questions and I'll do the rest. Press Ctrl-C to quit.")
         output_fn("")

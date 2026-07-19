@@ -1,4 +1,4 @@
-"""Local Flask web UI for doc-to-hand.
+"""Local Flask web UI for handscrybe.
 
 A single-page tool: the user uploads a document (PDF / DOCX / TXT) and,
 optionally, a photo of their handwriting sample sheet (A-Z, a-z, 0-9). The app
@@ -11,7 +11,7 @@ DESIGN
   cleaned up after the response is sent, so nothing accumulates on disk and two
   users never see each other's files.
 * The UI is intentionally one file (HTML/CSS/JS inlined below) so the app runs
-  from a single ``python -m doc_to_hand.webapp`` with no template/static setup.
+  from a single ``python -m handscrybe.webapp`` with no template/static setup.
 * This is a LOCAL tool bound to 127.0.0.1 by default. There is no auth: it is
   meant for a developer running it on their own machine, not public hosting.
   Uploaded files are size-capped to avoid accidentally OOMing the box.
@@ -102,7 +102,7 @@ def create_app() -> Flask:
             )
 
         # Each request works in its own temp dir; cleaned up after send.
-        work = tempfile.mkdtemp(prefix="doc_to_hand_web_")
+        work = tempfile.mkdtemp(prefix="handscrybe_web_")
         doc_path = os.path.join(work, "input" + doc_ext)
         doc.save(doc_path)
 
@@ -185,7 +185,7 @@ _INDEX_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>doc-to-hand</title>
+<title>handscrybe</title>
 <style>
   :root { --bg:#faf9f6; --ink:#1a1a2e; --accent:#3b5bdb; --line:#e3e0d8; }
   * { box-sizing: border-box; }
@@ -218,7 +218,7 @@ _INDEX_HTML = """<!doctype html>
 </head>
 <body>
 <main>
-  <h1>doc-to-hand</h1>
+  <h1>handscrybe</h1>
   <p class="sub">Turn a document into handwriting while keeping its layout.</p>
 
   <form id="form">
@@ -330,7 +330,7 @@ form.addEventListener('submit', async (e) => {
 def _find_free_port(host: str, preferred: int) -> int:
     """Return the preferred port if it's free, otherwise an OS-assigned one.
 
-    Running `scrybe` twice, or having another service on :5000, shouldn't be a
+    Running `handscrybe` twice, or having another service on :5000, shouldn't be a
     hard error — we transparently fall back to a free port so the web app always
     comes up."""
     import socket
@@ -354,14 +354,14 @@ def main() -> int:
     run on the user's own machine, so it is intentionally NOT exposed to the
     network and has no authentication. Opens the browser automatically for a
     zero-friction start."""
-    host = os.environ.get("DOC_TO_HAND_HOST", "127.0.0.1")
-    preferred = int(os.environ.get("DOC_TO_HAND_PORT", "5000"))
+    host = os.environ.get("HANDSCRYBE_HOST", "127.0.0.1")
+    preferred = int(os.environ.get("HANDSCRYBE_PORT", "5000"))
     port = _find_free_port(host, preferred)
     url = f"http://{host}:{port}"
     app = create_app()
 
     print()
-    print(f"  Scrybe web app is running at:  {url}")
+    print(f"  Handscrybe web app is running at:  {url}")
     if port != preferred:
         print(f"  (port {preferred} was busy, so I picked {port} instead)")
     print("  Opening your browser… press Ctrl+C here to stop the server.")
@@ -380,7 +380,7 @@ def main() -> int:
         except Exception:
             pass
 
-    if os.environ.get("SCRYBE_NO_BROWSER") != "1":
+    if os.environ.get("HANDSCRYBE_NO_BROWSER") != "1":
         import threading
 
         threading.Thread(target=_open, daemon=True).start()

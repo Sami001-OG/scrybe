@@ -1,7 +1,7 @@
 'use strict';
 // Tiny terminal UI helpers: colors, banners, and prompts.
 //
-// Deliberately dependency-free (no chalk/inquirer) so `npm install -g scrybe`
+// Deliberately dependency-free (no chalk/inquirer) so `npm install -g handscrybe`
 // pulls nothing and can never fail on dependency resolution. Colors degrade to
 // plain text when stdout isn't a TTY or NO_COLOR is set, so piped/CI output
 // stays clean.
@@ -22,19 +22,24 @@ const c = {
   gray: wrap('90'),
 };
 
-// The 'S' monogram + wordmark. Kept ASCII-only so it renders in every terminal
-// (including Windows cmd.exe with legacy code pages).
+// Boxed wordmark. Kept to a simple ASCII box (no figlet art) so the name is
+// always spelled correctly and renders in every terminal, including Windows
+// cmd.exe with legacy code pages.
 function banner() {
-  const art = [
-    '   ____                _          ',
-    '  / ___|  ___ _ __ _   _| |__   ___ ',
-    "  \\___ \\ / __| '__| | | | '_ \\ / _ \\",
-    '   ___) | (__| |  | |_| | |_) |  __/',
-    '  |____/ \\___|_|   \\__, |_.__/ \\___|',
-    '                   |___/            ',
-  ];
-  const out = art.map((l) => c.cyan(l)).join('\n');
-  return out;
+  // Build the box programmatically so the borders always line up regardless of
+  // the content lengths (hand-counted spaces drift and look ragged).
+  const inner = ['H A N D S C R Y B E', 'typed documents -> your handwriting'];
+  const width = Math.max(...inner.map((s) => s.length)) + 4; // 2 spaces padding each side
+  const top = '+' + '-'.repeat(width) + '+';
+  const rows = inner.map((s) => {
+    const pad = width - s.length;
+    const left = Math.floor(pad / 2);
+    const right = pad - left;
+    return '|' + ' '.repeat(left) + s + ' '.repeat(right) + '|';
+  });
+  return ['  ' + top, ...rows.map((r) => '  ' + r), '  ' + top]
+    .map((l) => c.cyan(l))
+    .join('\n');
 }
 
 function heading(title) {

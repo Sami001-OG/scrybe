@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 'use strict';
-// Scrybe launcher — the `scrybe` command installed by `npm install -g scrybe`.
+// Handscrybe launcher — the `handscrybe` command installed by `npm install -g handscrybe`.
 //
 // This Node process is a thin bootstrapper. Its only jobs:
 //   1. Greet the user.
 //   2. Guarantee a Python 3.12+ interpreter exists (find on the system, or
 //      download a standalone build). See lib/python.js.
-//   3. Guarantee a venv with Scrybe + its deps is provisioned (first run only).
+//   3. Guarantee a venv with Handscrybe + its deps is provisioned (first run only).
 //      See lib/env.js.
 //   4. Hand off *completely* to the Python launcher, inheriting the terminal.
 //
@@ -17,7 +17,7 @@
 // line-buffered reader would swallow the answers Python expects and Python would
 // see EOF. One process owns stdin — so Node never reads it.
 //
-// No npm dependencies, so `npm install -g scrybe` is instant and can't fail on
+// No npm dependencies, so `npm install -g handscrybe` is instant and can't fail on
 // dependency resolution.
 
 const { spawn } = require('child_process');
@@ -42,17 +42,17 @@ async function main() {
     ui.err('Setup could not finish:');
     console.log('  ' + String(e.message || e).split('\n').join('\n  '));
     console.log('');
-    ui.info('If this persists, install Python 3.12+ yourself and re-run ' + ui.c.bold('scrybe') + '.');
+    ui.info('If this persists, install Python 3.12+ yourself and re-run ' + ui.c.bold('handscrybe') + '.');
     process.exit(1);
   }
 
   // Hand off to the Python menu. stdio:'inherit' gives Python the real terminal
   // so all prompts, colors, and the Flask log stream through directly, and this
   // Node process reads nothing from stdin.
-  const child = spawn(vpy, ['-m', 'doc_to_hand.launcher'], { stdio: 'inherit' });
+  const child = spawn(vpy, ['-m', 'handscrybe.launcher'], { stdio: 'inherit' });
   child.on('exit', (code) => process.exit(code || 0));
   child.on('error', (err) => {
-    ui.err('Could not start Scrybe: ' + err.message);
+    ui.err('Could not start Handscrybe: ' + err.message);
     process.exit(1);
   });
 }

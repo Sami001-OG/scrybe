@@ -21,13 +21,13 @@ _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from doc_to_hand.config import Config, LayoutMode
-from doc_to_hand.layout import (
+from handscrybe.config import Config, LayoutMode
+from handscrybe.layout import (
     fit_document,
     fit_line,
     fit_page,
 )
-from doc_to_hand.model import (
+from handscrybe.model import (
     Document,
     FontStyle,
     Line,

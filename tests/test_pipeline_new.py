@@ -24,8 +24,8 @@ if _SRC not in sys.path:
 
 import fitz  # noqa: E402
 
-from doc_to_hand.config import Config  # noqa: E402
-from doc_to_hand.pipeline import convert  # noqa: E402
+from handscrybe.config import Config  # noqa: E402
+from handscrybe.pipeline import convert  # noqa: E402
 
 # Reuse the sample-sheet generator from the glyph tests to avoid duplication.
 from test_glyphs import _make_sample_sheet  # noqa: E402
