@@ -397,12 +397,20 @@ def run_wizard(
             output_fn("No problem - nothing was written. Bye!")
             return 0
 
-        # Conversion loop: on an expected failure, offer a retry.
+        # Conversion loop: on an expected failure, offer a retry. A live progress
+        # bar (percentage + stage + elapsed) is driven by the pipeline's real
+        # stage callbacks; it auto-disables when stdout isn't a terminal, so tests
+        # and piped runs stay clean.
+        from .progress import TerminalProgress
+
         while True:
-            output_fn("Converting...")
+            output_fn("Converting your document...")
+            bar = TerminalProgress()
             try:
-                result = convert_fn(input_path, output_path, cfg)
+                result = convert_fn(input_path, output_path, cfg, progress=bar)
+                bar.finish()
             except (FileNotFoundError, ValueError, RuntimeError) as exc:
+                bar.clear()
                 output_fn(f"Conversion failed: {exc}")
                 if ask_yes_no(
                     "Try again?", input_fn=input_fn, output_fn=output_fn, default=False

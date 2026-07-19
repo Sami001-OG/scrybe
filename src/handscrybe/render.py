@@ -293,6 +293,7 @@ def render_pdf(
     config: Config,
     output_path: str,
     glyphs=None,
+    on_page=None,
 ) -> str:
     """Produce the final handwriting PDF and return ``output_path``.
 
@@ -312,9 +313,16 @@ def render_pdf(
         # layout dropped/reordered nothing still lines up 1:1.
         pages_by_number = {pp.number: pp for pp in placed_pages}
 
+        # Per-page progress is reported against the number of source pages, so
+        # the fraction the caller sees advances once per finished page. A no-op
+        # default keeps render UI-agnostic when no reporter is supplied.
+        total = doc.page_count
+        report_page = on_page or (lambda done, tot: None)
+
         for pno in range(doc.page_count):
             placed = pages_by_number.get(pno)
             if placed is None:
+                report_page(pno + 1, total)
                 continue
             page = doc[pno]
 
@@ -346,6 +354,8 @@ def render_pdf(
             # --- Draw handwriting ---------------------------------------
             for span in placed.spans:
                 _draw_span(page, span, fonts, config, glyphs)
+
+            report_page(pno + 1, total)
 
         # garbage=4 fully dedups/compacts the object tree (redactions leave
         # orphaned objects behind); deflate compresses streams. Both keep the

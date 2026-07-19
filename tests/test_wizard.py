@@ -72,8 +72,12 @@ class FakeConvert:
         self._result = result
         self._raises = raises
 
-    def __call__(self, input_path, output_path, config):
+    def __call__(self, input_path, output_path, config, progress=None):
         self.calls.append((input_path, output_path, config))
+        # The wizard now passes a progress callback; exercise it so a broken
+        # reporter would surface here, but keep the fake otherwise inert.
+        if progress is not None:
+            progress(1.0, "Done")
         if self._raises is not None:
             raise self._raises
         return self._result if self._result is not None else output_path

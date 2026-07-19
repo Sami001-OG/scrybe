@@ -141,12 +141,20 @@ def _config_from_args(args: argparse.Namespace) -> Config:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     cfg = _config_from_args(args)
+    # A live progress bar (percentage + stage + elapsed time) driven by the
+    # pipeline's real stage callbacks. It auto-disables when stdout isn't a
+    # terminal, so piped/redirected runs stay clean.
+    from .progress import TerminalProgress
+
+    bar = TerminalProgress()
     try:
-        out = convert(args.input, args.output, cfg)
+        out = convert(args.input, args.output, cfg, progress=bar)
+        bar.finish()
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         # These are the expected, user-actionable failures (missing input,
         # unsupported format, missing font, LibreOffice not found/failed).
-        # Print cleanly rather than dumping a traceback.
+        # Clear the bar first so the error prints on a clean line.
+        bar.clear()
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"wrote {out}")

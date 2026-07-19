@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
+import time
 import uuid
 
-from flask import Flask, Response, jsonify, request, send_file
+from flask import Flask, Response, jsonify, request
 
 from .config import Config
 from .pipeline import convert
@@ -40,16 +42,93 @@ _IMG_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 # 25 MB per upload. Generous for documents/photos, small enough to bound memory.
 _MAX_CONTENT_LENGTH = 25 * 1024 * 1024
 
+# Jobs older than this (seconds) are swept even if never downloaded, so a user
+# who starts a conversion and closes the tab doesn't leak a temp dir forever.
+_JOB_TTL = 900
+
 
 def _ext(filename: str) -> str:
     return os.path.splitext(filename or "")[1].lower()
 
 
+class _Job:
+    """One conversion's live state, shared between the worker thread and the
+    polling requests. All mutation goes through a lock because the worker writes
+    ``fraction``/``message``/``status`` while ``/progress`` reads them."""
+
+    __slots__ = (
+        "id", "work", "out_path", "out_name", "mimetype", "coverage",
+        "fraction", "message", "status", "error", "created", "_lock",
+    )
+
+    def __init__(self, job_id: str, work: str) -> None:
+        self.id = job_id
+        self.work = work
+        self.out_path = None
+        self.out_name = "handwriting.pdf"
+        self.mimetype = "application/pdf"
+        self.coverage = None
+        self.fraction = 0.0
+        self.message = "Starting"
+        self.status = "running"  # running | done | error
+        self.error = None
+        self.created = time.monotonic()
+        self._lock = threading.Lock()
+
+    def update(self, fraction: float, message: str) -> None:
+        with self._lock:
+            # Never let the reported fraction go backwards — a monotonic bar
+            # reads as trustworthy; a jumpy one does not.
+            self.fraction = max(self.fraction, min(1.0, max(0.0, fraction)))
+            self.message = message
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "status": self.status,
+                "percent": int(round(self.fraction * 100)),
+                "message": self.message,
+                "error": self.error,
+                "coverage": self.coverage,
+            }
+
+
+_MIMETYPES = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "txt": "text/plain; charset=utf-8",
+    "md": "text/markdown; charset=utf-8",
+}
+
+
 def create_app() -> Flask:
     """Build and return the Flask application (factory pattern so tests can get
-    an isolated instance with the test client)."""
+    an isolated instance with the test client).
+
+    Conversions run in a background thread so the browser can poll live progress
+    while the work happens. The flow is:
+
+        POST /convert       validate + stage files, start the worker -> {job_id}
+        GET  /progress/<id> poll {status, percent, message} until done/error
+        GET  /result/<id>   download the finished file (then the job is swept)
+
+    A per-app registry holds live jobs. This is a single-user local tool, so an
+    in-process dict guarded by a lock is the right amount of machinery.
+    """
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = _MAX_CONTENT_LENGTH
+
+    jobs: dict[str, _Job] = {}
+    jobs_lock = threading.Lock()
+
+    def _sweep_expired() -> None:
+        """Drop jobs that have outlived _JOB_TTL, cleaning their temp dirs. Cheap
+        enough to run opportunistically on each new conversion."""
+        now = time.monotonic()
+        for jid, job in list(jobs.items()):
+            if now - job.created > _JOB_TTL:
+                _safe_rmtree(job.work)
+                jobs.pop(jid, None)
 
     @app.get("/")
     def index() -> Response:
@@ -101,7 +180,7 @@ def create_app() -> Flask:
                 400,
             )
 
-        # Each request works in its own temp dir; cleaned up after send.
+        # Each job works in its own temp dir; cleaned up on download or by sweep.
         work = tempfile.mkdtemp(prefix="handscrybe_web_")
         doc_path = os.path.join(work, "input" + doc_ext)
         doc.save(doc_path)
@@ -120,7 +199,8 @@ def create_app() -> Flask:
             sample.save(sample_path)
             cfg.handwriting_image = sample_path
             # Segment once up front so we can report coverage AND fail early on a
-            # bad image, before spending time on document conversion.
+            # bad image, before starting the worker (this is a fast, synchronous
+            # validation so a bad sheet is a clean 400, not a failed job).
             try:
                 from .glyphs import GlyphSet
 
@@ -131,35 +211,73 @@ def create_app() -> Flask:
                 return jsonify(error=f"Could not read handwriting sample: {exc}"), 400
 
         out_path = os.path.join(work, "handwriting." + out_fmt.value)
-        try:
-            convert(doc_path, out_path, cfg)
-        except (FileNotFoundError, ValueError, RuntimeError) as exc:
-            _safe_rmtree(work)
-            return jsonify(error=str(exc)), 400
-        except Exception as exc:  # noqa: BLE001 - last-resort guard for the UI
-            _safe_rmtree(work)
-            return jsonify(error=f"Conversion failed: {exc}"), 500
 
-        # Stream the result back, then remove the temp dir. Read the bytes into
-        # memory first so we can delete the file before returning (Windows won't
-        # remove a file that's still open).
-        with open(out_path, "rb") as fh:
-            data = fh.read()
-        _safe_rmtree(work)
+        job_id = uuid.uuid4().hex
+        job = _Job(job_id, work)
+        job.out_path = out_path
+        job.out_name = f"handwriting.{out_fmt.value}"
+        job.mimetype = _MIMETYPES[out_fmt.value]
+        job.coverage = coverage
 
-        mimetypes = {
-            "pdf": "application/pdf",
-            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "txt": "text/plain; charset=utf-8",
-            "md": "text/markdown; charset=utf-8",
-        }
-        resp = Response(data, mimetype=mimetypes[out_fmt.value])
-        resp.headers["Content-Disposition"] = (
-            f'attachment; filename="handwriting.{out_fmt.value}"'
-        )
+        with jobs_lock:
+            _sweep_expired()
+            jobs[job_id] = job
+
+        def _worker():
+            try:
+                convert(doc_path, out_path, cfg, progress=job.update)
+            except (FileNotFoundError, ValueError, RuntimeError) as exc:
+                with job._lock:
+                    job.status = "error"
+                    job.error = str(exc)
+                return
+            except Exception as exc:  # noqa: BLE001 - last-resort guard
+                with job._lock:
+                    job.status = "error"
+                    job.error = f"Conversion failed: {exc}"
+                return
+            with job._lock:
+                job.fraction = 1.0
+                job.message = "Done"
+                job.status = "done"
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        resp = {"job_id": job_id}
         if coverage is not None:
-            # Non-standard header the front-end reads to show "X/Y glyphs used".
-            resp.headers["X-Glyph-Coverage"] = f"{coverage[0]}/{coverage[1]}"
+            resp["coverage"] = f"{coverage[0]}/{coverage[1]}"
+        return jsonify(resp), 202
+
+    @app.get("/progress/<job_id>")
+    def progress_route(job_id: str):
+        job = jobs.get(job_id)
+        if job is None:
+            return jsonify(error="Unknown or expired job."), 404
+        return jsonify(job.snapshot())
+
+    @app.get("/result/<job_id>")
+    def result_route(job_id: str):
+        job = jobs.get(job_id)
+        if job is None:
+            return jsonify(error="Unknown or expired job."), 404
+        snap = job.snapshot()
+        if snap["status"] == "running":
+            return jsonify(error="Not finished yet."), 409
+        if snap["status"] == "error":
+            return jsonify(error=job.error or "Conversion failed."), 500
+
+        # Read bytes into memory, then remove the temp dir and retire the job so
+        # nothing lingers (Windows won't delete a file that's still open).
+        with open(job.out_path, "rb") as fh:
+            data = fh.read()
+        with jobs_lock:
+            jobs.pop(job_id, None)
+        _safe_rmtree(job.work)
+
+        resp = Response(data, mimetype=job.mimetype)
+        resp.headers["Content-Disposition"] = f'attachment; filename="{job.out_name}"'
+        if job.coverage is not None:
+            resp.headers["X-Glyph-Coverage"] = f"{job.coverage[0]}/{job.coverage[1]}"
         return resp
 
     @app.errorhandler(413)
@@ -209,11 +327,20 @@ _INDEX_HTML = """<!doctype html>
   button:disabled { opacity:.5; cursor:default; }
   #status { margin-top:16px; min-height:22px; font-size:14px; }
   .err { color:#c92a2a; } .ok { color:#2b8a3e; }
-  .spin { display:inline-block; width:14px; height:14px; border:2px solid #ccc;
-          border-top-color:var(--accent); border-radius:50%;
-          animation:spin .7s linear infinite; vertical-align:-2px; margin-right:6px; }
-  @keyframes spin { to { transform:rotate(360deg); } }
   code { background:#f0eee8; padding:1px 5px; border-radius:4px; font-size:13px; }
+  /* Progress panel: hidden until a conversion starts. */
+  #progress { margin-top:18px; display:none; }
+  #progress.show { display:block; }
+  .pbar { position:relative; height:26px; background:#eceae3;
+          border-radius:13px; overflow:hidden; border:1px solid var(--line); }
+  .pfill { position:absolute; left:0; top:0; bottom:0; width:0%;
+           background:linear-gradient(90deg,#3b5bdb,#5b7cfa);
+           border-radius:13px; transition:width .35s ease; }
+  .pnum { position:absolute; width:100%; text-align:center; line-height:26px;
+          font-size:13px; font-weight:700; color:var(--ink);
+          font-variant-numeric:tabular-nums; }
+  .pmsg { margin-top:8px; font-size:13px; color:#666; min-height:18px; }
+  .pmsg .elapsed { color:#999; }
 </style>
 </head>
 <body>
@@ -275,6 +402,12 @@ _INDEX_HTML = """<!doctype html>
     </div>
 
     <button type="submit" id="go">Convert to handwriting</button>
+
+    <div id="progress">
+      <div class="pbar"><div class="pfill" id="pfill"></div>
+        <div class="pnum" id="pnum">0%</div></div>
+      <div class="pmsg" id="pmsg">Starting&hellip;</div>
+    </div>
     <div id="status"></div>
   </form>
 </main>
@@ -283,43 +416,81 @@ _INDEX_HTML = """<!doctype html>
 const form = document.getElementById('form');
 const status = document.getElementById('status');
 const go = document.getElementById('go');
+const progress = document.getElementById('progress');
+const pfill = document.getElementById('pfill');
+const pnum = document.getElementById('pnum');
+const pmsg = document.getElementById('pmsg');
 
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  status.className = '';
-  status.innerHTML = '<span class="spin"></span>Converting&hellip;';
-  go.disabled = true;
+function setBar(pct, msg) {
+  pfill.style.width = pct + '%';
+  pnum.textContent = pct + '%';
+  if (msg) pmsg.textContent = msg;
+}
 
-  try {
-    const resp = await fetch('/convert', { method:'POST', body:new FormData(form) });
-    if (!resp.ok) {
-      let msg = 'Conversion failed.';
-      try { msg = (await resp.json()).error || msg; } catch (_) {}
-      status.className = 'err';
-      status.textContent = msg;
+function fail(msg) {
+  progress.style.display = 'none';
+  status.className = 'err';
+  status.textContent = msg;
+  go.disabled = false;
+}
+
+// Poll /progress until the job finishes, then download from /result. The bar
+// reflects the pipeline's real stages (normalize -> parse -> fit -> per-page
+// render -> save), so the percentage tracks actual work, not a timer.
+function poll(jobId) {
+  fetch('/progress/' + jobId).then((r) => r.json()).then((s) => {
+    if (s.error) { fail(s.error); return; }
+    setBar(s.percent || 0, s.message || '');
+    if (s.status === 'running') {
+      setTimeout(() => poll(jobId), 400);
       return;
     }
-    const cov = resp.headers.get('X-Glyph-Coverage');
-    // Derive the download filename from the server's Content-Disposition so the
-    // extension always matches the format actually produced.
+    if (s.status === 'error') { fail(s.error || 'Conversion failed.'); return; }
+    // status === 'done' — fetch the file.
+    setBar(100, 'Done');
+    download(jobId, s.coverage);
+  }).catch((err) => fail('Lost contact with the server: ' + err));
+}
+
+function download(jobId, cov) {
+  fetch('/result/' + jobId).then((resp) => {
+    if (!resp.ok) {
+      return resp.json().then((j) => fail(j.error || 'Download failed.'));
+    }
     let fname = 'handwriting.' + (form.querySelector('#format').value || 'pdf');
     const cd = resp.headers.get('Content-Disposition') || '';
     const m = cd.match(/filename="([^"]+)"/);
     if (m) fname = m[1];
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = fname; a.click();
-    URL.revokeObjectURL(url);
-    status.className = 'ok';
-    status.textContent = 'Done. Downloaded ' + fname
-      + (cov ? ' \\u2014 used your handwriting for ' + cov + ' characters.' : '.');
-  } catch (err) {
-    status.className = 'err';
-    status.textContent = 'Network or server error: ' + err;
-  } finally {
-    go.disabled = false;
-  }
+    const hcov = resp.headers.get('X-Glyph-Coverage') || cov;
+    resp.blob().then((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname; a.click();
+      URL.revokeObjectURL(url);
+      progress.style.display = 'none';
+      status.className = 'ok';
+      status.textContent = 'Done. Downloaded ' + fname
+        + (hcov ? ' \\u2014 used your handwriting for ' + hcov + ' characters.' : '.');
+      go.disabled = false;
+    });
+  }).catch((err) => fail('Download error: ' + err));
+}
+
+form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  status.className = '';
+  status.textContent = '';
+  go.disabled = true;
+  progress.style.display = 'block';
+  setBar(0, 'Uploading&hellip;');
+
+  fetch('/convert', { method:'POST', body:new FormData(form) })
+    .then((resp) => resp.json().then((body) => ({ ok: resp.ok, body })))
+    .then(({ ok, body }) => {
+      if (!ok) { fail(body.error || 'Conversion failed.'); return; }
+      poll(body.job_id);
+    })
+    .catch((err) => fail('Network error: ' + err));
 });
 </script>
 </body>
@@ -386,7 +557,11 @@ def main() -> int:
         threading.Thread(target=_open, daemon=True).start()
 
     try:
-        app.run(host=host, port=port, debug=False)
+        # threaded=True is essential: conversions run in a background thread and
+        # the browser polls /progress concurrently. The default single-threaded
+        # dev server would block those polls until the whole conversion finished,
+        # defeating the live progress bar.
+        app.run(host=host, port=port, debug=False, threaded=True)
     except KeyboardInterrupt:
         print("\n  Server stopped.")
     return 0

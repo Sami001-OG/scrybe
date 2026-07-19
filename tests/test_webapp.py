@@ -58,6 +58,40 @@ def _txt_doc() -> bytes:
     return "Hello handwriting world.\nSecond line here.".encode("utf-8")
 
 
+def _run_conversion(client, data, *, timeout_s: float = 30.0):
+    """Drive the full job flow: POST /convert, poll /progress to completion, then
+    GET /result. Returns the final Flask response from /result.
+
+    Conversion now runs in a background thread and reports live progress, so a
+    test must start the job, wait for it to finish, and then download — exactly
+    what the browser does. Progress percentages are asserted to be monotonic and
+    to reach 100, which is the whole point of the feature."""
+    import time
+
+    start = client.post("/convert", data=data, content_type="multipart/form-data")
+    assert start.status_code == 202, start.data[:300]
+    job_id = start.get_json()["job_id"]
+
+    last_pct = -1
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        snap = client.get(f"/progress/{job_id}").get_json()
+        pct = snap["percent"]
+        # Percentage must never go backwards — a monotonic bar is trustworthy.
+        assert pct >= last_pct, f"progress went backwards: {last_pct} -> {pct}"
+        last_pct = pct
+        if snap["status"] == "done":
+            assert pct == 100
+            break
+        if snap["status"] == "error":
+            raise AssertionError(f"job errored: {snap.get('error')}")
+        time.sleep(0.02)
+    else:
+        raise AssertionError("conversion did not finish within timeout")
+
+    return client.get(f"/result/{job_id}")
+
+
 def test_index_loads(client):
     r = client.get("/")
     assert r.status_code == 200
@@ -65,14 +99,13 @@ def test_index_loads(client):
 
 
 def test_convert_txt_ttf_only(client):
-    r = client.post(
-        "/convert",
-        data={
+    r = _run_conversion(
+        client,
+        {
             "document": (io.BytesIO(_txt_doc()), "hello.txt"),
             "ink": "original",
             "mode": "fit",
         },
-        content_type="multipart/form-data",
     )
     assert r.status_code == 200, r.data[:300]
     assert r.data[:4] == b"%PDF"  # a real PDF came back
@@ -81,7 +114,9 @@ def test_convert_txt_ttf_only(client):
 
 
 def test_convert_with_handwriting_sample_reports_coverage(client):
-    r = client.post(
+    # Coverage is reported synchronously in the /convert response (the sheet is
+    # segmented up front), and echoed on the final /result download.
+    start = client.post(
         "/convert",
         data={
             "document": (io.BytesIO(_txt_doc()), "hello.txt"),
@@ -90,6 +125,18 @@ def test_convert_with_handwriting_sample_reports_coverage(client):
             "mode": "fit",
         },
         content_type="multipart/form-data",
+    )
+    assert start.status_code == 202, start.data[:300]
+    assert start.get_json()["coverage"] == "62/62"
+
+    r = _run_conversion(
+        client,
+        {
+            "document": (io.BytesIO(_txt_doc()), "hello.txt"),
+            "sample": (io.BytesIO(_sample_sheet_png()), "sheet.png"),
+            "ink": "#1a1a6e",
+            "mode": "fit",
+        },
     )
     assert r.status_code == 200, r.data[:300]
     assert r.data[:4] == b"%PDF"
@@ -123,3 +170,29 @@ def test_rejects_bad_sample_image_type(client):
     )
     assert r.status_code == 400
     assert b"image type" in r.data
+
+
+def test_progress_unknown_job_is_404(client):
+    r = client.get("/progress/does-not-exist")
+    assert r.status_code == 404
+
+
+def test_result_unknown_job_is_404(client):
+    r = client.get("/result/does-not-exist")
+    assert r.status_code == 404
+
+
+def test_result_before_finish_is_conflict(client):
+    # Start a job but ask for the result immediately; until it's done, /result
+    # should say "not finished" (409) rather than hand back a partial file.
+    start = client.post(
+        "/convert",
+        data={"document": (io.BytesIO(_txt_doc()), "hello.txt")},
+        content_type="multipart/form-data",
+    )
+    assert start.status_code == 202
+    job_id = start.get_json()["job_id"]
+    r = client.get(f"/result/{job_id}")
+    # Either it's still running (409) or it already finished (200) on a fast
+    # machine; both are correct, but it must never be a 5xx or partial.
+    assert r.status_code in (200, 409)
