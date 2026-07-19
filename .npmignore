@@ -1,0 +1,22 @@
+# npm pack/publish does NOT honor .gitignore — this file controls what ships
+# in the published tarball. Keep it in sync with .gitignore's Python section.
+
+# Python build/cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+.pytest_cache/
+
+# Dev-only trees (the engine source under src/ is what we ship)
+tests/
+.claude/
+.lo_profile*/
+
+# Scratch files
+_*.pdf
+_*.docx
+*.tgz
