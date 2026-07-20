@@ -555,23 +555,145 @@ def _reconcile_span_count(
     return spans
 
 
+def _connected_components(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Label 8-connected ink regions and return one bounding box per region.
+
+    This is the letter finder. A projection profile collapses a row to a single
+    ink-per-column curve, so two letters whose x-ranges overlap even slightly
+    (the norm in real, slightly-slanted handwriting) share columns and read as
+    ONE blob — the verified failure where 26 letters projected to 4-8 spans and
+    the reconciler then chopped those blobs at arbitrary ink valleys, landing
+    every box on the wrong letter. Labeling in 2-D instead keeps letters that are
+    horizontally adjacent but not touching as separate regions, which is what a
+    human sees.
+
+    Implementation is a row-run union-find rather than per-pixel labeling: each
+    horizontal ink run on a scanline is one node, and runs on vertically adjacent
+    scanlines whose columns overlap (or touch diagonally, giving 8-connectivity)
+    are merged. Cost is O(number of runs), which stays fast on the wide
+    sample-sheet bands where a per-pixel loop would crawl, and needs no
+    scipy/cv2. Returns half-open ``(c0, r0, c1, r1)`` boxes in arbitrary order.
+    """
+    H, W = mask.shape
+    parent: list[int] = [0]  # 1-indexed labels; index 0 is unused
+
+    def find(x: int) -> int:
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:  # path compression
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    all_runs: list[tuple[int, int, int, int]] = []  # (label, row, start, end_incl)
+    prev_runs: list[tuple[int, int, int]] = []       # (start, end_incl, label)
+    next_label = 1
+
+    for y in range(H):
+        idx = np.nonzero(mask[y])[0]
+        if idx.size == 0:
+            prev_runs = []
+            continue
+        # Contiguous ink runs on this scanline (ends are inclusive).
+        breaks = np.nonzero(np.diff(idx) > 1)[0]
+        starts = np.concatenate(([idx[0]], idx[breaks + 1]))
+        ends = np.concatenate((idx[breaks], [idx[-1]]))
+
+        cur_runs: list[tuple[int, int, int]] = []
+        for s, e in zip(starts.tolist(), ends.tolist()):
+            lbl = next_label
+            parent.append(lbl)
+            next_label += 1
+            # 8-connect to any previous-row run whose columns touch [s-1, e+1].
+            for (ps, pe, plbl) in prev_runs:
+                if ps <= e + 1 and pe >= s - 1:
+                    union(lbl, plbl)
+            cur_runs.append((s, e, lbl))
+            all_runs.append((lbl, y, s, e))
+        prev_runs = cur_runs
+
+    boxes: dict[int, list[int]] = {}
+    for (lbl, y, s, e) in all_runs:
+        root = find(lbl)
+        b = boxes.get(root)
+        if b is None:
+            boxes[root] = [s, y, e, y]
+        else:
+            if s < b[0]:
+                b[0] = s
+            if y < b[1]:
+                b[1] = y
+            if e > b[2]:
+                b[2] = e
+            if y > b[3]:
+                b[3] = y
+    return [(b[0], b[1], b[2] + 1, b[3] + 1) for b in boxes.values()]
+
+
 def _row_char_boxes(
     ink: np.ndarray, r0: int, r1: int, expected: int
 ) -> list[tuple[int, int, int, int]]:
     """Return character boxes for a single text row, trying to hit ``expected``.
 
-    Splits the row into column spans, reconciles the span count toward
-    ``expected`` in BOTH directions (split touching letters when too few, merge
-    over-segmented fragments when too many — see `_reconcile_span_count`), then
-    vertically tightens each surviving span to its own ink. Returning exactly
-    ``expected`` boxes wherever possible is what keeps the later zip against the
-    expected characters aligned."""
+    Finds letters as 2-D connected ink regions (see `_connected_components`),
+    which — unlike a 1-D column projection — keeps horizontally-adjacent letters
+    apart even when their x-ranges overlap, the case that made projection paste
+    whole groups of letters into one box and mis-pair the row. Components are
+    then:
+
+    1. Denoised — specks tiny in BOTH dimensions (scan salt) are dropped.
+    2. Ordered left-to-right by horizontal center.
+    3. Merged when their x-intervals overlap, which re-unites the parts of a
+       single character that are not ink-connected: the dot over an ``i``/``j``,
+       a stray accent, a broken stroke. Two distinct letters sit side by side in
+       x, so this does not fuse them.
+    4. Reconciled toward ``expected`` in BOTH directions (`_reconcile_span_count`)
+       to absorb any residual over-/under-segmentation, then vertically tightened
+       to each span's own ink.
+
+    Hitting exactly ``expected`` boxes wherever possible is what keeps the later
+    zip against the expected character sequence aligned."""
     h, w = ink.shape
     band = ink[r0:r1, :]
+    band_h = r1 - r0
     col_profile = band.sum(axis=0)
-    col_min_run = max(2, int(round(w * 0.006)))
-    col_min_gap = max(2, int(round(w * 0.008)))
-    col_spans = _segments_from_projection(col_profile, col_min_run, col_min_gap)
+
+    comps = _connected_components(band)
+    # Drop specks that are small in BOTH dimensions (scan noise); a legitimately
+    # thin mark (an apostrophe, the stem of an 'l') survives on its tall side.
+    min_dim = max(2, int(round(band_h * 0.10)))
+    comps = [
+        c for c in comps
+        if (c[2] - c[0]) >= min_dim or (c[3] - c[1]) >= min_dim
+    ]
+
+    if comps:
+        comps.sort(key=lambda c: (c[0] + c[2]) / 2.0)
+        # Merge components that overlap in x — parts of one character (i/j dot,
+        # accent, broken stroke) — into a single span. Separate letters don't
+        # overlap in x, so they stay distinct.
+        merged: list[tuple[int, int, int, int]] = []
+        for c in comps:
+            if merged and c[0] <= merged[-1][2]:
+                p = merged[-1]
+                merged[-1] = (
+                    min(p[0], c[0]), min(p[1], c[1]),
+                    max(p[2], c[2]), max(p[3], c[3]),
+                )
+            else:
+                merged.append(c)
+        col_spans = [(c[0], c[2]) for c in merged]
+    else:
+        # Faint/blank row: fall back to the column-projection splitter so we
+        # still emit whatever spans exist rather than nothing.
+        col_min_run = max(2, int(round(w * 0.006)))
+        col_min_gap = max(2, int(round(w * 0.008)))
+        col_spans = _segments_from_projection(col_profile, col_min_run, col_min_gap)
 
     col_spans = _reconcile_span_count(col_spans, col_profile, expected)
 

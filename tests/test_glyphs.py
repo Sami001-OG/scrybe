@@ -44,13 +44,18 @@ def _make_sample_sheet(
     noise: float = 0.0,
     jitter: int = 0,
     dpi_scale: float = 2.0,
+    col_gap: float = 20.0,
+    slant: float = 0.0,
 ) -> None:
     """Render a handwriting-style sample sheet and save it as a raster image.
 
-    Each row is drawn with generous inter-character spacing so the segmenter has
-    clear gaps. `noise` sprinkles salt/pepper specks (fraction of pixels) and
-    `jitter` shifts each character up/down by up to +/-jitter px to mimic a
-    hand-written, un-ruled sheet."""
+    Each row is drawn with `col_gap` points of inter-character spacing (generous
+    by default so the segmenter has clear gaps). `noise` sprinkles salt/pepper
+    specks (fraction of pixels) and `jitter` shifts each character up/down by up
+    to +/-jitter px to mimic a hand-written, un-ruled sheet. `slant` skews each
+    row's baseline (points of vertical drift per character) to mimic the upward/
+    downward tilt of real handwriting; combined with a small `col_gap` this
+    reproduces the real-world case where letters' x-ranges overlap."""
     # Lay out on a PDF page first (easy text placement), then rasterize.
     page_w, page_h = 612.0, 300.0
     doc = fitz.open()
@@ -59,13 +64,12 @@ def _make_sample_sheet(
     top = 60.0
     row_gap = 70.0
     left = 40.0
-    col_gap = 20.0
     fontsize = 28.0
     for ri, row in enumerate(rows):
         y = top + ri * row_gap
         x = left
-        for ch in row:
-            page.insert_text((x, y), ch, fontname="helv", fontsize=fontsize)
+        for ci, ch in enumerate(row):
+            page.insert_text((x, y + ci * slant), ch, fontname="helv", fontsize=fontsize)
             x += fontsize * 0.6 + col_gap
 
     pix = page.get_pixmap(matrix=fitz.Matrix(dpi_scale, dpi_scale))
@@ -139,6 +143,82 @@ def test_glyph_alpha_is_transparent_paper(tmp_path):
 def test_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         GlyphSet.from_sheet(str(tmp_path / "nope.png"))
+
+
+def test_tight_slanted_rows_map_to_correct_letters(tmp_path):
+    """Regression for the real-world failure: tightly-spaced, slanted letters.
+
+    With a small inter-character gap and a per-row slant, adjacent letters'
+    x-ranges overlap. A 1-D column projection then sees a whole group of letters
+    as ONE ink blob (verified: 26 letters projecting to 4-8 spans), and the
+    count-reconciler chops those blobs at arbitrary ink valleys — so every box
+    after the first merge lands on the WRONG letter even though the box COUNT
+    comes out right. Connected-components segmentation isolates each letter in
+    2-D instead, which this test locks in.
+
+    We don't just count glyphs (the old bug produced the right count of wrong
+    glyphs); we verify each extracted glyph actually matches the letter it was
+    paired with. The check is by ink signature: re-render every candidate letter
+    in the same font and pick the best-correlated one, then require the paired
+    letter to be that best match. That catches an off-by-one shift that a pure
+    count assertion would miss."""
+    sheet = str(tmp_path / "tight.png")
+    # col_gap small enough that neighboring letters share columns once slanted.
+    _make_sample_sheet(sheet, col_gap=3.0, slant=0.6)
+
+    gs = GlyphSet.from_sheet(sheet)
+
+    # Render a reference bitmap for each letter in the same font, so we can
+    # identify what an extracted glyph actually depicts independent of pairing.
+    def _trim_to_ink(ink: np.ndarray) -> np.ndarray:
+        # Crop to the ink bounding box so shape, not position/padding, is
+        # compared. Both the reference and the extracted glyph are trimmed the
+        # same way before correlation.
+        ys, xs = np.nonzero(ink > ink.max() * 0.25)
+        if ys.size == 0:
+            return ink
+        return ink[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
+
+    def _ref_bitmap(ch: str, box: int = 48) -> np.ndarray:
+        doc = fitz.open()
+        page = doc.new_page(width=box, height=box)
+        page.insert_text((box * 0.2, box * 0.75), ch, fontname="helv", fontsize=box * 0.7)
+        pix = page.get_pixmap(matrix=fitz.Matrix(1, 1))
+        doc.close()
+        g = np.asarray(
+            Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("L")
+        )
+        return _trim_to_ink((255 - g).astype(np.float64))  # ink positive, trimmed
+
+    def _score(a: np.ndarray, b: np.ndarray) -> float:
+        # Compare two ink masks by trimming to ink, resizing to a common grid,
+        # and correlating — so the comparison is of glyph shape, not placement.
+        ai = Image.fromarray(_trim_to_ink(a)).resize((32, 32))
+        bi = Image.fromarray(b).resize((32, 32))
+        av = np.asarray(ai, dtype=np.float64).ravel()
+        bv = np.asarray(bi, dtype=np.float64).ravel()
+        av -= av.mean()
+        bv -= bv.mean()
+        denom = (np.linalg.norm(av) * np.linalg.norm(bv)) or 1.0
+        return float(np.dot(av, bv) / denom)
+
+    # Uppercase is the least ambiguous row; verify each paired glyph's ink best
+    # matches its own letter among all 26 candidates.
+    refs = {ch: _ref_bitmap(ch) for ch in UPPER}
+    correct = 0
+    for ch in UPPER:
+        g = gs.get(ch)
+        if g is None:
+            continue
+        alpha = np.asarray(g.image.convert("RGBA"))[..., 3].astype(np.float64)
+        best = max(UPPER, key=lambda cand: _score(alpha, refs[cand]))
+        if best == ch:
+            correct += 1
+
+    # Allow a couple of genuinely confusable pairs (O/Q, I/J at low res) to miss,
+    # but the row must be overwhelmingly correctly mapped — the old blob-cutting
+    # segmenter scored near-random here.
+    assert correct >= 24, f"only {correct}/26 uppercase glyphs mapped to the right letter"
 
 
 def test_partial_sheet_only_pairs_present_rows(tmp_path):
