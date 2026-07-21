@@ -144,13 +144,34 @@ def test_severe_overflow_hits_hscale_floor_and_reduces_size():
     assert rendered_width <= 76.0 + 1e-6
 
 
-def test_extreme_overflow_hits_both_floors_gracefully():
+def test_extreme_overflow_guarantees_fit_by_default():
     # W_hw = 20 * 0.5 * 10 = 100; budget 60.
     # raw hscale 0.6 -> floor 0.8; remaining_ratio = 60/80 = 0.75 < min_size_scale
-    # -> size_factor clamps to 0.90. Both floors hit; residual overflow accepted.
+    # -> size_factor clamps to 0.90. Both floors are spent and the line would
+    # still overflow (0.8 * 90 = 72 > 60). With guarantee_fit (the default) the
+    # hscale floor is given up and the line is condensed the rest of the way, so
+    # NOTHING is ever clipped — the no-cut guarantee the product must uphold.
     span = make_span("a" * 20, x0=100.0, budget=60.0)
     line = Line(spans=[span])
     cfg = Config()
+
+    (placed,) = fit_line(line, measure, cfg)
+
+    # Size still rests on its floor (the size lever is spent first)...
+    assert placed.size == pytest.approx(10.0 * cfg.min_size_scale)  # 9.0 floor
+    # ...but hscale is pushed BELOW its floor to contain the line fully.
+    assert placed.hscale < cfg.min_horizontal_scale
+    rendered_width = placed.hscale * measure(span.text, span.style, placed.size)
+    assert rendered_width <= 60.0 + 1e-6  # fully contained: no letter cut off
+
+
+def test_extreme_overflow_can_opt_out_of_guarantee():
+    # Same geometry as above, but guarantee_fit disabled restores the old
+    # "condense to the floors, then accept residual overflow" behavior.
+    span = make_span("a" * 20, x0=100.0, budget=60.0)
+    line = Line(spans=[span])
+    cfg = Config()
+    cfg.guarantee_fit = False
 
     (placed,) = fit_line(line, measure, cfg)
 

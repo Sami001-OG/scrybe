@@ -25,21 +25,71 @@ const c = {
 // Boxed wordmark. Kept to a simple ASCII box (no figlet art) so the name is
 // always spelled correctly and renders in every terminal, including Windows
 // cmd.exe with legacy code pages.
+// The "HS" wordmark drawn in heavy box-drawing block characters. This is the
+// product's logo; when the terminal can render Unicode it leads the banner.
+const _HS_LOGO = [
+  '██╗  ██╗███████╗',
+  '██║  ██║██╔════╝',
+  '███████║███████╗',
+  '██╔══██║╚════██║',
+  '██║  ██║███████║',
+  '╚═╝  ╚═╝╚══════╝',
+];
+
+// Whether we can safely print the block-character logo. The logo uses U+2588
+// block and U+2550-range box-drawing glyphs that legacy Windows code pages
+// (cmd.exe on CP437/CP850) render as mojibake, so we gate on evidence of a
+// UTF-8-capable terminal:
+//   * any non-Windows TTY (modern *nix/macOS terminals are UTF-8),
+//   * Windows Terminal / VS Code / other modern hosts that advertise UTF-8
+//     via WT_SESSION, TERM_PROGRAM, or a UTF-8 locale.
+// When unsure we fall back to the plain ASCII wordmark, which renders anywhere.
+// Non-TTY output (piped/redirected) always takes the ASCII path so logs stay
+// clean. NO_COLOR only strips color, not the Unicode art — an uncolored logo
+// still renders fine on a UTF-8 terminal.
+function _unicodeOK() {
+  if (!process.stdout.isTTY) return false;
+  if (process.platform !== 'win32') return true;
+  if (process.env.WT_SESSION || process.env.TERM_PROGRAM) return true;
+  const enc = (process.env.LANG || process.env.LC_ALL || process.env.LC_CTYPE || '');
+  return /utf-?8/i.test(enc);
+}
+
+// Center a line inside `width` columns (extra space biased right, like the box).
+function _center(s, width) {
+  const pad = Math.max(0, width - s.length);
+  const left = Math.floor(pad / 2);
+  return ' '.repeat(left) + s + ' '.repeat(pad - left);
+}
+
+// Boxed wordmark. When the terminal is UTF-8-capable we show the "HS" block
+// logo above the name; otherwise we degrade to a pure-ASCII box so the name is
+// always spelled correctly and renders in every terminal, including legacy
+// Windows cmd.exe. Borders are built programmatically so they always line up.
 function banner() {
-  // Build the box programmatically so the borders always line up regardless of
-  // the content lengths (hand-counted spaces drift and look ragged).
-  const inner = ['H A N D S C R Y B E', 'typed documents -> your handwriting'];
-  const width = Math.max(...inner.map((s) => s.length)) + 4; // 2 spaces padding each side
-  const top = '+' + '-'.repeat(width) + '+';
-  const rows = inner.map((s) => {
-    const pad = width - s.length;
-    const left = Math.floor(pad / 2);
-    const right = pad - left;
-    return '|' + ' '.repeat(left) + s + ' '.repeat(right) + '|';
-  });
-  return ['  ' + top, ...rows.map((r) => '  ' + r), '  ' + top]
-    .map((l) => c.cyan(l))
-    .join('\n');
+  const name = 'H A N D S C R Y B E';
+  const tag = 'typed documents -> your handwriting';
+  const useLogo = _unicodeOK();
+
+  // Inner width accommodates the widest of: the logo art, the name, the tagline.
+  const logoWidth = useLogo ? Math.max(..._HS_LOGO.map((l) => l.length)) : 0;
+  const width = Math.max(logoWidth, name.length, tag.length) + 4; // 2 spaces padding each side
+  const bar = (useLogo ? '═' : '-').repeat(width);
+  const [tl, tr, bl, br, v] = useLogo
+    ? ['╔', '╗', '╚', '╝', '║']
+    : ['+', '+', '+', '+', '|'];
+  const box = (s) => v + _center(s, width) + v;
+
+  const lines = [tl + bar + tr];
+  if (useLogo) {
+    for (const l of _HS_LOGO) lines.push(box(l));
+    lines.push(box(''));
+  }
+  lines.push(box(name));
+  lines.push(box(tag));
+  lines.push(bl + bar + br);
+
+  return lines.map((l) => '  ' + c.cyan(l)).join('\n');
 }
 
 function heading(title) {

@@ -102,6 +102,18 @@ class Config:
     # this fraction (e.g. 0.90 = shrink to 90%) as a last resort in FIT mode.
     min_size_scale: float = 0.90
 
+    # Hard no-clip guarantee. When True (the default), a line that STILL exceeds
+    # its original width after both the hscale floor and the size floor have been
+    # spent is condensed the rest of the way regardless of the hscale floor, so
+    # the handwriting is always fully contained inside its source extent. The
+    # alternative — accepting residual overflow — lets a long line's tail run
+    # into the next span, off the right margin, or past the page edge, where it
+    # reads as a cut-off letter. A slightly over-condensed line stays fully
+    # legible AND fully on the page, so correctness (nothing cut) wins over the
+    # aesthetic floor in this last-resort case. Set False to restore the old
+    # "condense to the floors, then allow overflow" behavior.
+    guarantee_fit: bool = True
+
     # When a line has slack (handwriting narrower than original), spread the
     # extra space between words up to this factor of a normal space before
     # leaving the line left-aligned. Prevents rivers while keeping right edges

@@ -42,10 +42,59 @@ def _hint_for(platform: str) -> str:
     return _LIBREOFFICE_HINTS["linux"]
 
 
+# The "HS" wordmark in box-drawing art, echoing the npm launcher's banner so the
+# CLI looks the same whether it was reached through the Node bootstrapper or a
+# direct `python -m handscrybe.launcher`. Kept as a literal block (indented two
+# spaces) so it lands flush under the menu's own two-space gutter.
+_LOGO = [
+    "  ██╗  ██╗███████╗",
+    "  ██║  ██║██╔════╝",
+    "  ███████║███████╗",
+    "  ██╔══██║╚════██║",
+    "  ██║  ██║███████║",
+    "  ╚═╝  ╚═╝╚══════╝",
+]
+
+# Pure-ASCII fallback wordmark for terminals that can't encode the block art
+# (e.g. a legacy Windows console on cp1252, where U+2588 raises
+# UnicodeEncodeError). Same "HS" spelled plainly so the banner never crashes the
+# menu it's supposed to introduce.
+_LOGO_ASCII = [
+    "  #  #  ####",
+    "  #  #  #",
+    "  ####  ###",
+    "  #  #     #",
+    "  #  #  ####",
+]
+
+
+def _encodable(text: str) -> bool:
+    """True if `text` can be encoded in stdout's encoding without error.
+
+    The banner uses block-drawing characters and an em-dash that a legacy
+    Windows console (cp1252) can't represent; printing them there raises
+    UnicodeEncodeError and would abort before the menu ever shows. We probe the
+    active stdout encoding and fall back to an ASCII banner when it can't carry
+    the fancy glyphs, so the tool runs everywhere."""
+    enc = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        text.encode(enc)
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
 def _banner(output_fn: OutputFn) -> None:
-    output_fn("=" * 60)
-    output_fn("  Handscrybe — turn typed documents into handwriting")
-    output_fn("=" * 60)
+    fancy = "".join(_LOGO)
+    tagline = "  Handscrybe — turn typed documents into handwriting"
+    if _encodable(fancy) and _encodable(tagline):
+        for line in _LOGO:
+            output_fn(line)
+        output_fn(tagline)
+    else:
+        for line in _LOGO_ASCII:
+            output_fn(line)
+        output_fn("  Handscrybe - turn typed documents into handwriting")
 
 
 def run_menu(

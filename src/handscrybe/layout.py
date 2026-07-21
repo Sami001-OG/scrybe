@@ -159,8 +159,9 @@ def _fit_line_fit_mode(
 
     hscale = 1.0
     size_factor = 1.0
+    condensed = W_hw > trigger
 
-    if W_hw > trigger:
+    if condensed:
         # Condense to the true original width (not the trigger): fitting to
         # W_orig is the invariant that keeps the right edge where it belongs.
         hscale = W_orig / W_hw
@@ -183,7 +184,26 @@ def _fit_line_fit_mode(
         widths = [
             measure(s.text, s.style, fs) for s, fs in zip(spans, final_sizes)
         ]
-    offsets, _ = _natural_offsets(line, widths)
+    offsets, W_hw_final = _natural_offsets(line, widths)
+
+    # No-clip guarantee (last resort). After spending both the hscale floor and
+    # the size floor, a very long line can still measure wider than its budget
+    # once re-measured (hscale * W_hw_final > W_orig). Left alone that residual
+    # spills past the line's right edge — off the margin or into the next span —
+    # and reads as a cut-off letter, the exact failure this product must never
+    # produce. When `guarantee_fit` is set we give up the hscale floor (the
+    # least-damaging lever still available) and condense the rest of the way so
+    # the whole line is contained. Legibility degrades gracefully to a narrower
+    # hand; nothing is ever clipped. We only do this for lines we already chose
+    # to condense, so a deliberately tolerated mild overflow
+    # (max_overflow_before_scale > 1.0) is still honored.
+    if (
+        cfg.guarantee_fit
+        and condensed
+        and W_hw_final > 0.0
+        and hscale * W_hw_final > W_orig
+    ):
+        hscale = W_orig / W_hw_final
 
     # Placement. True slack (fits at natural width) preserves each span's exact
     # original x so an unchanged line is pixel-faithful. Anything we had to
