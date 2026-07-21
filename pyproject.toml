@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "handscrybe"
-version = "3.2.0"
+version = "0.3.2"
 description = "Handscrybe turns typed documents (PDF/DOCX/TXT) into handwriting while preserving the original page layout."
 readme = "README.md"
 license = { file = "LICENSE" }

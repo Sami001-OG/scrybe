@@ -1,6 +1,6 @@
 {
   "name": "handscrybe",
-  "version": "3.2.0",
+  "version": "0.3.2",
   "description": "Turn typed documents (PDF/DOCX/TXT) into handwriting while preserving the original page layout. Interactive CLI and local web UI.",
   "bin": {
     "handscrybe": "npm/bin/handscrybe.js"
